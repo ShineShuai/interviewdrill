@@ -125,13 +125,28 @@ def read_answer() -> str:
     return "\n".join(lines)
 
 
+HINTS = {
+    "bug:": "This is a debugging exercise. The reference is verified ground truth (a sanitizer "
+            "report and a minimal fix). 'correct' = names the bug class and root cause; 'depth' "
+            "= a valid fix and why it works (any correct fix counts); 'clarity' = communication.",
+    "kata:": "This is a coding exercise answered as an approach, pseudocode or code. The "
+             "reference solution is verified. 'correct' = would give right answers within the "
+             "limits (equal or better algorithms count); 'depth' = complexity and edge cases; "
+             "'clarity' = communication.",
+}
+
+
+def system_for(card_id: str) -> str:
+    return "\n".join([SYSTEM, *(h for p, h in HINTS.items() if card_id.startswith(p))])
+
+
 def judge(card: sqlite3.Row, answer: str) -> dict:
     import anthropic  # lazy: offline commands and tests need no SDK
 
     prompt = (f"Question: {card['question']}\n\nReference points:\n{card['ref']}\n\n"
               f"Candidate answer:\n{answer or '(no answer)'}")
     msg = anthropic.Anthropic().messages.create(
-        model=MODEL, max_tokens=1000, system=SYSTEM, tools=[GRADE_TOOL],
+        model=MODEL, max_tokens=1000, system=system_for(card["id"]), tools=[GRADE_TOOL],
         tool_choice={"type": "tool", "name": "grade"},
         messages=[{"role": "user", "content": prompt}],
     )

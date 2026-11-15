@@ -20,6 +20,16 @@ class ScheduleTest(unittest.TestCase):
         self.assertGreater(i, 3.0)
 
 
+class JudgeHintTest(unittest.TestCase):
+    def test_exercise_kinds_get_a_hint(self):
+        plain = drill.system_for("go-chan")
+        self.assertEqual(plain, drill.SYSTEM)
+        self.assertIn("debugging exercise", drill.system_for("bug:uaf"))
+        self.assertIn("coding exercise", drill.system_for("kata:max-sum"))
+        self.assertTrue(drill.system_for("bug:x").startswith(drill.SYSTEM))
+        self.assertEqual(drill.system_for("bugfix"), drill.SYSTEM)
+
+
 class CardsTest(unittest.TestCase):
     def test_cards_parse(self):
         cards = drill.load_cards()

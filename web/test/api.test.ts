@@ -114,6 +114,25 @@ test("attempt: validation and quota", async () => {
   assert.equal(sent.length, 2);
 });
 
+test("exercise cards: grader gets the kind hint and multi-line question round-trips", async () => {
+  const code = "Find the bug.\n\n  1 | int main() {}";
+  db.raw
+    .prepare("INSERT INTO cards VALUES('bug:uaf', 'bugs', ?, '- Bug class: heap-use-after-free')")
+    .run(code);
+  const res0 = await call("/api/next?topic=bugs");
+  const next = (await res0.json()) as { cards: { question: string }[] };
+  assert.equal(next.cards[0].question, code);
+  const topics = async () => {
+    const st = (await (await call("/api/status")).json()) as { topics: { topic: string }[] };
+    return st.topics.map((t) => t.topic);
+  };
+  assert.ok((await topics()).includes("bugs"));
+  const res = await post("/api/attempt", { card_id: "bug:uaf", answer: "use after free" });
+  assert.equal(res.status, 200);
+  assert.match(String(sent[0].body.system), /debugging exercise/);
+  assert.ok(!(await topics()).includes("bugs")); // answered, so no longer due
+});
+
 test("grader failure maps to 502 and stores nothing", async () => {
   globalThis.fetch = (async () => new Response("boom", { status: 500 })) as typeof fetch;
   assert.equal((await post("/api/attempt", { card_id: "c1", answer: "a" })).status, 502);

@@ -30,3 +30,9 @@ progress { width: 100%; }
 table { border-collapse: collapse; width: 100%; }
 th, td { text-align: left; padding: .25rem .5rem; border-bottom: 1px solid #8883; }
 pre { white-space: pre-wrap; }
+pre.q, .mono {
+  font: .85rem/1.4 ui-monospace, Menlo, Consolas, monospace;
+}
+pre.q {
+  max-height: 50vh; overflow: auto; padding: .75rem; border: 1px solid #8884; border-radius: .5rem;
+}

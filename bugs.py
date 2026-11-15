@@ -206,6 +206,15 @@ def ground_truth(meta: dict) -> str:
             f"- Verified fix (diff):\n{v['diff']}")
 
 
+def card_for(meta: dict, bdir: Path) -> dict:
+    """The bug as an exercise (CLI and web): question = numbered code, ref = verified truth."""
+    code = (bdir / "buggy.cpp").read_text()
+    question = ("Find the single bug in this C++ program, explain its root cause and how to "
+                f"fix it.\n\n{numbered(code)}")
+    return {"id": f"bug:{meta['id']}", "topic": "bugs", "question": question,
+            "ref": ground_truth(meta)}
+
+
 def review() -> Counter:
     done: Counter = Counter()
     for work in sorted(p.parent for p in PENDING.glob("*/bug.json")):
@@ -242,13 +251,10 @@ def practice(db, category: str | None = None, rng=random) -> bool:
         print("nothing due" if bugs else "no bugs to practice; run: bugs.py gen")
         return False
     meta = bugs[bid]
-    code = (BUGS / bid / "buggy.cpp").read_text()
-    print(f"\nThis C++ program has one bug.\n\n{numbered(code)}\n")
+    card = card_for(meta, BUGS / bid)
+    print(f"\n{card['question']}\n")
     print("Name the bug class, the root cause and the fix (finish with an empty line):")
-    answer = drill.read_answer()
-    question = f"Find the single bug in this C++ program, explain it, and fix it.\n\n{code}"
-    card = {"question": question, "ref": ground_truth(meta)}
-    g = drill.judge(card, answer)
+    g = drill.judge(card, drill.read_answer())
     q = drill.score(g)
     days = kata.record(db, f"bug:{bid}", q, round(q), 5, json.dumps(g))
     drill.show(g, q, days)

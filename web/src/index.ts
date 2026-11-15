@@ -105,9 +105,9 @@ const attempt: Handler = async ({ req, env, user }) => {
   const secs = Math.min(3600, Math.max(0, Number(body.secs) || 0));
   if (!answer) throw new HttpError(400, "empty answer");
   if (answer.length > MAX_ANSWER) throw new HttpError(413, "answer too long");
-  const card = await env.DB.prepare("SELECT question, ref FROM cards WHERE id = ?1")
+  const card = await env.DB.prepare("SELECT id, question, ref FROM cards WHERE id = ?1")
     .bind(cardId)
-    .first<{ question: string; ref: string }>();
+    .first<{ id: string; question: string; ref: string }>();
   if (!card) throw new HttpError(404, "unknown card");
 
   await takeQuota(env, user);

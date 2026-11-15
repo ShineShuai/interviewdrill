@@ -9,6 +9,7 @@ from unittest import mock
 
 import bugs
 import drill
+import export_cards
 import kata
 
 HAVE_CXX = shutil.which(bugs.CXX) is not None
@@ -217,6 +218,12 @@ class PipelineTest(unittest.TestCase):
         with mock.patch("builtins.input", side_effect=["a"]), quiet:
             self.assertEqual(dict(bugs.review()), {"approved": 1})
         self.assertEqual(list(bugs.load_bugs()), [meta["id"]])
+        card = bugs.card_for(bugs.load_bugs()[meta["id"]], bugs.BUGS / meta["id"])
+        self.assertEqual((card["id"], card["topic"]), (f"bug:{meta['id']}", "bugs"))
+        self.assertTrue(card["question"].startswith("Find the single bug in this C++ program"))
+        self.assertIn("  6 |     v.push_back(4);", card["question"])
+        self.assertIn("Bug class: heap-use-after-free", card["ref"])
+        self.assertIn(card, export_cards.exercise_cards())
 
         grade = {"correct": 4, "depth": 3, "clarity": 5, "missed": [], "errors": [],
                  "followup": "?"}

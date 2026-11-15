@@ -1,6 +1,7 @@
 # drill web
 
-Cloudflare Worker (API) + D1 + PWA. Cards come from `../cards/*.md` (shared with the CLI).
+Cloudflare Worker (API) + D1 + PWA. Cards come from `../cards/*.md` (shared with the CLI),
+plus approved katas and bug exercises (`../export_cards.py`).
 
 ## Deploy
 ```
@@ -27,3 +28,14 @@ npm run db:init:local && npm run cards:local && npm run dev
 - Daily cap (`DAILY_CAP`, default 200) counts LLM + STT calls per user per UTC day.
 - Add a user: allow their email in Access. State is already per `user_id`.
 - Grader prompt and `schedule()` mirror `drill.py`; keep both in sync or retire the CLI judge.
+
+## Katas and bug exercises
+`npm run cards` also publishes approved `katas/` and `bugs/` entries as cards with ids `kata:<id>`
+and `bug:<id>` (topics `katas`, `bugs`; needs `python3`, override with `PYTHON`). The sync fails
+if the export fails, because a silent skip would prune them from D1.
+- Bugs: read the numbered C++, explain the class, cause and fix. Graded against the verified
+  sanitizer report and diff.
+- Katas: explain algorithm, complexity and edge cases (code optional). Graded against the verified
+  reference solution and the known wrong approaches. Nothing is executed on the web; run
+  `kata.py solve` locally for tests.
+- The reference is shown after grading, never before.

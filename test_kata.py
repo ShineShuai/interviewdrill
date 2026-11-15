@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 import drill
+import export_cards
 import kata
 
 REF = """import sys
@@ -56,6 +57,7 @@ SPEC = {
     "examples": [{"input": "5\n1 -2 3 4 -1\n", "output": "7\n"},
                  {"input": "3\n-3 -1 -2\n", "output": "-1\n"}],
     "reference": REF, "brute": BRUTE, "generator": GEN, "wrong": [WRONG_EMPTY, WRONG_SLOW],
+    "approach": "Kadane's algorithm: O(n) time, O(1) space; handle all-negative input.",
 }
 FAST = dict(small=12, large=1, big=20000)  # keep tests quick; O(n^2) at 20k still times out
 
@@ -172,6 +174,28 @@ class PracticeTest(Base):
     def solve(self, name):
         cmd = [sys.executable, str(self.sols / f"{name}.py")]
         return kata.run_tests(kata.KATAS / self.kid, cmd)
+
+    def test_card_for_builds_a_web_exercise(self):
+        card = kata.card_for(kata.load_katas()[self.kid], kata.KATAS / self.kid)
+        self.assertEqual((card["id"], card["topic"]), (f"kata:{self.kid}", "katas"))
+        head, _, body = card["question"].partition("\n")
+        self.assertTrue(head.startswith("Kata: Maximum subarray sum - explain how you would"))
+        self.assertIn("largest sum of a non-empty contiguous subarray", body)
+        self.assertIn("Example 2\nInput:\n3\n-3 -1 -2\nOutput:\n-1", body)
+        self.assertTrue(body.endswith("Time limit: 2.0s per test."))
+        self.assertIn("- Intended approach: Kadane's algorithm", card["ref"])
+        self.assertIn("best = cur = a[0]", card["ref"])  # the reference solution
+        self.assertIn("Known wrong approach 2 (fails the tests)", card["ref"])
+
+    def test_export_includes_only_approved_exercises(self):
+        pending = kata.PENDING / "later"
+        pending.mkdir(parents=True, exist_ok=True)
+        (pending / "kata.json").write_text("{}")
+        self.addCleanup(shutil.rmtree, pending)
+        cards = export_cards.exercise_cards()
+        self.assertEqual([c["id"] for c in cards if c["id"].startswith("kata:")],
+                         [f"kata:{self.kid}"])
+        self.assertEqual(json.loads(json.dumps(cards)), cards)
 
     def test_review_moved_kata_out_of_pending(self):
         self.assertIn(self.kid, kata.load_katas())

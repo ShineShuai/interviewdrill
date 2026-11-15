@@ -149,7 +149,15 @@ async function drill(topic, n) {
 function ask(card, label) {
   return new Promise((resolve) => {
     const t0 = performance.now();
-    const box = h("textarea", { rows: 8, placeholder: "Answer; Ctrl+Enter submits" });
+    // Exercises (bug:, kata:) have a one-line instruction followed by code or a statement.
+    const [head, ...rest] = card.question.split("\n");
+    const body = rest.join("\n").trim();
+    const box = h("textarea", {
+      rows: body ? 12 : 8,
+      class: body ? "mono" : null,
+      spellcheck: body ? "false" : null,
+      placeholder: "Answer; Ctrl+Enter submits",
+    });
     const msg = h("p", { class: "err" });
     const mic = h("button", { onclick: () => toggleMic(mic, box, msg) }, "Record");
     const send = h("button", { class: "primary" }, "Submit");
@@ -180,11 +188,12 @@ function ask(card, label) {
     });
     view.replaceChildren(
       h("p", { class: "dim" }, `${label} · ${card.topic}`),
-      h("h2", {}, card.question),
+      h("h2", {}, head),
+      body ? h("pre", { class: "q" }, body) : null,
       h(
         "div",
         { class: "row" },
-        h("button", { onclick: () => speak(card.question) }, "Read aloud"),
+        h("button", { onclick: () => speak(head) }, "Read aloud"),
         mic,
       ),
       box,
@@ -239,7 +248,11 @@ async function report() {
     h("h1", {}, `Last ${r.days} days`),
     r.topics.length ? table : h("p", {}, "No attempts yet."),
     h("h3", {}, "Weakest cards"),
-    h("ul", {}, ...r.weakest.map((w) => h("li", {}, `${f(w.score)} · ${w.question}`))),
+    h(
+      "ul",
+      {},
+      ...r.weakest.map((w) => h("li", {}, `${f(w.score)} · ${w.question.split("\n")[0]}`)),
+    ),
     h("h3", {}, "Daily score"),
     ...r.trend.map((d) =>
       h("label", {}, `${d.day.slice(5)} (${d.n})`, h("progress", { max: 5, value: d.score })),

@@ -49,6 +49,7 @@ Return:
 - generator: Python 3 script; argv = seed size; prints one valid input. Sizes 1..8 are tiny
   cases (cover edge cases: minimum size, duplicates, negatives, ties); size 50000 is large.
 - wrong: 2-3 plausible but incorrect Python solutions (off-by-one, missed edge case, too slow).
+- approach: 2-4 sentences: the intended algorithm, its complexity and the key edge cases.
 Standard library only. Use the seed for all randomness."""
 
 STR = {"type": "string"}
@@ -63,7 +64,7 @@ PROPOSE_TOOL = {
                 "type": "object", "properties": {"input": STR, "output": STR},
                 "required": ["input", "output"]}},
             "reference": STR, "brute": STR, "generator": STR,
-            "wrong": {"type": "array", "items": STR},
+            "wrong": {"type": "array", "items": STR}, "approach": STR,
         },
         "required": ["title", "statement", "examples", "reference", "brute", "generator", "wrong"],
     },
@@ -189,6 +190,7 @@ def make_kata(topic, difficulty, avoid, propose_fn=propose, repairs=2, **vkw):
             meta = {"id": work.name, "title": title, "topic": topic,
                     "difficulty": max(1, min(5, int(spec.get("difficulty") or difficulty))),
                     "statement": spec["statement"], "examples": spec["examples"][:3],
+                    "approach": str(spec.get("approach") or "").strip(),
                     "time_limit": report["time_limit"],
                     "provenance": {"model": gen.MODEL, "verified": report}}
             (work / "kata.json").write_text(json.dumps(meta, indent=2))
@@ -274,6 +276,23 @@ def show_kata(m: dict) -> None:
     for i, ex in enumerate(m["examples"], 1):
         print(f"\nExample {i} input:\n{ex['input']}Output:\n{ex['output']}")
     print(f"\nsolve: kata.py solve {m['id']} -- <command that reads stdin>")
+
+
+def card_for(meta: dict, kdir: Path) -> dict:
+    """The kata as a web exercise: answered as an approach (or code), graded by an LLM."""
+    examples = "\n\n".join(
+        f"Example {i}\nInput:\n{e['input'].rstrip()}\nOutput:\n{e['output'].rstrip()}"
+        for i, e in enumerate(meta["examples"], 1))
+    question = (f"Kata: {meta['title']} - explain how you would solve it: algorithm, complexity, "
+                f"edge cases (code optional).\n\n{meta['statement']}\n\n{examples}\n\n"
+                f"Time limit: {meta['time_limit']}s per test.")
+    ref = [f"- Intended approach: {meta['approach']}"] if meta.get("approach") else []
+    ref.append("- Verified reference solution (Python; agrees with a brute force on random "
+               "tests):\n" + (kdir / "reference.py").read_text()[:3000])
+    for i, path in enumerate(sorted(kdir.glob("wrong*.py")), 1):
+        ref.append(f"- Known wrong approach {i} (fails the tests):\n{path.read_text()[:1500]}")
+    return {"id": f"kata:{meta['id']}", "topic": "katas", "question": question,
+            "ref": "\n".join(ref)}
 
 
 def review() -> Counter:
