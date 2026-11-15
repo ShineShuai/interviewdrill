@@ -11,6 +11,11 @@ test("parses id | question headings and bodies", () => {
   ]);
 });
 
+test("provenance comments are not part of the reference", () => {
+  const text = "## a | Q?\n<!-- src: go/spec#1; verified: quote+entailment -->\n- x\n";
+  assert.deepEqual(parseCards("t", text), [{ id: "a", topic: "t", question: "Q?", ref: "- x" }]);
+});
+
 test("shared cards/ directory is well formed", () => {
   const dir = new URL("../../cards/", import.meta.url);
   const cards = readdirSync(dir)

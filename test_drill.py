@@ -1,22 +1,39 @@
-from drill import load_cards, schedule
+import tempfile
+import unittest
+from pathlib import Path
+
+import drill
 
 
-def test_fail_resets_interval():
-    ease, interval, reps = schedule(2.5, 10.0, 4, 2.0)
-    assert (interval, reps) == (1.0, 0) and ease < 2.5
+class ScheduleTest(unittest.TestCase):
+    def test_fail_resets_interval(self):
+        ease, interval, reps = drill.schedule(2.5, 10.0, 4, 2.0)
+        self.assertEqual((interval, reps), (1.0, 0))
+        self.assertLess(ease, 2.5)
+
+    def test_progression(self):
+        e, i, r = drill.schedule(2.5, 0.0, 0, 5)
+        self.assertEqual((i, r), (1.0, 1))
+        e, i, r = drill.schedule(e, i, r, 5)
+        self.assertEqual((i, r), (3.0, 2))
+        _, i, _ = drill.schedule(e, i, r, 5)
+        self.assertGreater(i, 3.0)
 
 
-def test_progression():
-    e, i, r = schedule(2.5, 0.0, 0, 5)
-    assert (i, r) == (1.0, 1)
-    e, i, r = schedule(e, i, r, 5)
-    assert (i, r) == (3.0, 2)
-    _, i, _ = schedule(e, i, r, 5)
-    assert i > 3.0
+class CardsTest(unittest.TestCase):
+    def test_cards_parse(self):
+        cards = drill.load_cards()
+        ids = [c["id"] for c in cards]
+        self.assertTrue(cards)
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertTrue(all(c["question"] and c["ref"] for c in cards))
+
+    def test_provenance_comment_is_not_reference(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "t.md").write_text("## t-a | Q?\n<!-- src: x -->\n- p\n")
+            (card,) = drill.load_cards(Path(d))
+        self.assertEqual((card["id"], card["question"], card["ref"]), ("t-a", "Q?", "- p"))
 
 
-def test_cards_parse():
-    cards = load_cards()
-    ids = [c["id"] for c in cards]
-    assert cards and len(ids) == len(set(ids))
-    assert all(c["question"] and c["ref"] for c in cards)
+if __name__ == "__main__":
+    unittest.main()

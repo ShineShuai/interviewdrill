@@ -5,7 +5,10 @@ export interface Card {
   ref: string;
 }
 
-/** Parse `## id | question` headings; the body lines are the reference (same as drill.py). */
+/**
+ * Parse `## id | question` headings; body lines are the reference (same as drill.py).
+ * `<!-- -->` lines are provenance and are not part of the reference.
+ */
 export function parseCards(topic: string, text: string): Card[] {
   return ("\n" + text)
     .split("\n## ")
@@ -13,7 +16,10 @@ export function parseCards(topic: string, text: string): Card[] {
     .map((block) => {
       const nl = block.indexOf("\n");
       const head = nl < 0 ? block : block.slice(0, nl);
-      const body = nl < 0 ? "" : block.slice(nl + 1);
+      const body = (nl < 0 ? "" : block.slice(nl + 1))
+        .split("\n")
+        .filter((ln) => !ln.trimStart().startsWith("<!--"))
+        .join("\n");
       const bar = head.indexOf("|");
       const id = bar < 0 ? head : head.slice(0, bar);
       const question = bar < 0 ? "" : head.slice(bar + 1);

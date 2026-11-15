@@ -66,15 +66,16 @@ def now(delta_days: float = 0.0) -> str:
     return t.isoformat(timespec="seconds")
 
 
-def load_cards(path: Path = CARDS) -> list[dict]:
-    """Parse `## id | question` headings; the body lines are the reference."""
+def load_cards(path: Path | None = None) -> list[dict]:
+    """Parse `## id | question` headings; body lines minus <!-- --> comments are the reference."""
     cards = []
-    for file in sorted(path.glob("*.md")):
+    for file in sorted((path or CARDS).glob("*.md")):
         for block in ("\n" + file.read_text()).split("\n## ")[1:]:
             head, _, body = block.partition("\n")
             cid, _, question = head.partition("|")
+            ref = "\n".join(ln for ln in body.splitlines() if not ln.lstrip().startswith("<!--"))
             cards.append({"id": cid.strip(), "topic": file.stem,
-                          "question": question.strip(), "ref": body.strip()})
+                          "question": question.strip(), "ref": ref.strip()})
     return cards
 
 
