@@ -221,11 +221,11 @@ def add_source(topic: str, src: str) -> tuple[Path, int]:
 
 
 # --- LLM steps (injectable for tests) ---
-def call_tool(system: str, tool: dict, prompt: str) -> dict:
+def call_tool(system: str, tool: dict, prompt: str, max_tokens: int = 2000) -> dict:
     import anthropic  # lazy: offline commands and tests need no SDK
 
     msg = anthropic.Anthropic().messages.create(
-        model=MODEL, max_tokens=2000, system=system, tools=[tool],
+        model=MODEL, max_tokens=max_tokens, system=system, tools=[tool],
         tool_choice={"type": "tool", "name": tool["name"]},
         messages=[{"role": "user", "content": prompt}],
     )
