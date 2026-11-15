@@ -1,0 +1,230 @@
+import { authenticate } from "./auth.ts";
+import type { Env } from "./env.ts";
+import { HttpError, json } from "./http.ts";
+import { judge, score } from "./judge.ts";
+import { iso, schedule, streak, type CardState } from "./srs.ts";
+
+interface Ctx {
+  req: Request;
+  env: Env;
+  url: URL;
+  user: string;
+}
+type Handler = (c: Ctx) => Promise<Response>;
+
+const DAY_MS = 86_400_000;
+const MAX_ANSWER = 4000;
+const MAX_AUDIO = 8_000_000;
+const NEW_STATE: CardState = { ease: 2.5, interval: 0, reps: 0 };
+
+function clampInt(v: string | null, lo: number, hi: number, dflt: number): number {
+  const n = Math.trunc(Number(v));
+  return v !== null && Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : dflt;
+}
+
+async function readJson(req: Request): Promise<Record<string, unknown>> {
+  try {
+    const body = await req.json();
+    if (body && typeof body === "object") return body as Record<string, unknown>;
+  } catch {
+    // fall through
+  }
+  throw new HttpError(400, "invalid JSON body");
+}
+
+/** Count one billable call (LLM or STT) per user per UTC day; throws 429 over the cap. */
+async function takeQuota(env: Env, user: string): Promise<void> {
+  const row = await env.DB.prepare(
+    "INSERT INTO usage(user_id, day, calls) VALUES(?1, ?2, 1) " +
+      "ON CONFLICT(user_id, day) DO UPDATE SET calls = calls + 1 RETURNING calls",
+  )
+    .bind(user, iso(new Date()).slice(0, 10))
+    .first<{ calls: number }>();
+  if ((row?.calls ?? 0) > Number(env.DAILY_CAP ?? 200)) {
+    throw new HttpError(429, "daily cap reached");
+  }
+}
+
+function toBase64(buf: ArrayBuffer): string {
+  const bytes = new Uint8Array(buf);
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(s);
+}
+
+const status: Handler = async ({ env, user }) => {
+  const now = iso(new Date());
+  const today = now.slice(0, 10);
+  const [topics, done, days] = await Promise.all([
+    env.DB.prepare(
+      "SELECT c.topic AS topic, COUNT(*) AS due FROM cards c " +
+        "LEFT JOIN card_state s ON s.card_id = c.id AND s.user_id = ?1 " +
+        "WHERE COALESCE(s.due, '') <= ?2 GROUP BY c.topic ORDER BY c.topic",
+    )
+      .bind(user, now)
+      .all<{ topic: string; due: number }>(),
+    env.DB.prepare("SELECT COUNT(*) AS n FROM attempts WHERE user_id = ?1 AND ts >= ?2")
+      .bind(user, today)
+      .first<{ n: number }>(),
+    env.DB.prepare(
+      "SELECT DISTINCT substr(ts, 1, 10) AS d FROM attempts WHERE user_id = ?1 " +
+        "ORDER BY d DESC LIMIT 400",
+    )
+      .bind(user)
+      .all<{ d: string }>(),
+  ]);
+  return json({
+    user,
+    topics: topics.results,
+    due: topics.results.reduce((sum, t) => sum + t.due, 0),
+    today: { n: done?.n ?? 0 },
+    streak: streak(days.results.map((r) => r.d), today),
+  });
+};
+
+const next: Handler = async ({ env, url, user }) => {
+  const n = clampInt(url.searchParams.get("n"), 1, 20, 5);
+  const topic = url.searchParams.get("topic") || null;
+  const rows = await env.DB.prepare(
+    "SELECT c.id, c.topic, c.question FROM cards c " +
+      "LEFT JOIN card_state s ON s.card_id = c.id AND s.user_id = ?1 " +
+      "WHERE COALESCE(s.due, '') <= ?2 AND (?3 IS NULL OR c.topic = ?3) " +
+      "ORDER BY COALESCE(s.due, ''), RANDOM() LIMIT ?4",
+  )
+    .bind(user, iso(new Date()), topic, n)
+    .all();
+  return json({ cards: rows.results });
+};
+
+const attempt: Handler = async ({ req, env, user }) => {
+  const body = await readJson(req);
+  const cardId = String(body.card_id ?? "");
+  const answer = String(body.answer ?? "").trim();
+  const secs = Math.min(3600, Math.max(0, Number(body.secs) || 0));
+  if (!answer) throw new HttpError(400, "empty answer");
+  if (answer.length > MAX_ANSWER) throw new HttpError(413, "answer too long");
+  const card = await env.DB.prepare("SELECT question, ref FROM cards WHERE id = ?1")
+    .bind(cardId)
+    .first<{ question: string; ref: string }>();
+  if (!card) throw new HttpError(404, "unknown card");
+
+  await takeQuota(env, user);
+  const grade = await judge(env, card, answer);
+  const q = score(grade);
+  const state =
+    (await env.DB.prepare(
+      "SELECT ease, interval, reps FROM card_state WHERE user_id = ?1 AND card_id = ?2",
+    )
+      .bind(user, cardId)
+      .first<CardState>()) ?? NEW_STATE;
+  const nx = schedule(state, q);
+  const now = new Date();
+  const due = iso(new Date(+now + nx.interval * DAY_MS));
+  await env.DB.batch([
+    env.DB.prepare(
+      "INSERT INTO card_state(user_id, card_id, ease, interval, reps, due) " +
+        "VALUES(?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT(user_id, card_id) " +
+        "DO UPDATE SET ease = ?3, interval = ?4, reps = ?5, due = ?6",
+    ).bind(user, cardId, nx.ease, nx.interval, nx.reps, due),
+    env.DB.prepare(
+      "INSERT INTO attempts(user_id, card_id, ts, secs, answer, correct, depth, clarity, " +
+        "score, detail) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+    ).bind(
+      user, cardId, iso(now), secs, answer,
+      grade.correct, grade.depth, grade.clarity, q, JSON.stringify(grade),
+    ),
+  ]);
+  return json({ grade, score: q, interval: nx.interval, ref: card.ref });
+};
+
+const stt: Handler = async ({ req, env, user }) => {
+  const audio = await req.arrayBuffer();
+  if (audio.byteLength === 0 || audio.byteLength > MAX_AUDIO) {
+    throw new HttpError(413, "audio size out of range");
+  }
+  await takeQuota(env, user);
+  try {
+    const out = (await env.AI.run("@cf/openai/whisper-large-v3-turbo", {
+      audio: toBase64(audio),
+      language: env.STT_LANG ?? "en",
+    })) as { text?: string };
+    return json({ text: (out.text ?? "").trim() });
+  } catch (e) {
+    console.error("stt", e);
+    throw new HttpError(502, "transcription failed");
+  }
+};
+
+const report: Handler = async ({ env, url, user }) => {
+  const days = clampInt(url.searchParams.get("days"), 1, 365, 14);
+  const since = iso(new Date(Date.now() - days * DAY_MS));
+  const [topics, weakest, trend] = await Promise.all([
+    env.DB.prepare(
+      "SELECT c.topic AS topic, COUNT(*) AS n, AVG(a.score) AS score, " +
+        "AVG(a.correct) AS correct, AVG(a.depth) AS depth, AVG(a.clarity) AS clarity " +
+        "FROM attempts a " +
+        "JOIN cards c ON c.id = a.card_id WHERE a.user_id = ?1 AND a.ts >= ?2 " +
+        "GROUP BY c.topic ORDER BY score",
+    )
+      .bind(user, since)
+      .all(),
+    env.DB.prepare(
+      "SELECT a.card_id AS card_id, c.question AS question, AVG(a.score) AS score, " +
+        "COUNT(*) AS n FROM attempts a JOIN cards c ON c.id = a.card_id " +
+        "WHERE a.user_id = ?1 AND a.ts >= ?2 GROUP BY a.card_id ORDER BY score LIMIT 5",
+    )
+      .bind(user, since)
+      .all(),
+    env.DB.prepare(
+      "SELECT substr(ts, 1, 10) AS day, COUNT(*) AS n, AVG(score) AS score FROM attempts " +
+        "WHERE user_id = ?1 AND ts >= ?2 GROUP BY day ORDER BY day",
+    )
+      .bind(user, since)
+      .all(),
+  ]);
+  return json({ days, topics: topics.results, weakest: weakest.results, trend: trend.results });
+};
+
+const exportAll: Handler = async ({ env, user }) => {
+  const [state, attempts] = await Promise.all([
+    env.DB.prepare("SELECT * FROM card_state WHERE user_id = ?1").bind(user).all(),
+    env.DB.prepare("SELECT * FROM attempts WHERE user_id = ?1 ORDER BY ts").bind(user).all(),
+  ]);
+  return json(
+    { exported: iso(new Date()), user, card_state: state.results, attempts: attempts.results },
+    200,
+    { "Content-Disposition": 'attachment; filename="drill-export.json"' },
+  );
+};
+
+const ROUTES: Record<string, Handler> = {
+  "GET /api/status": status,
+  "GET /api/next": next,
+  "POST /api/attempt": attempt,
+  "POST /api/stt": stt,
+  "GET /api/report": report,
+  "GET /api/export": exportAll,
+};
+
+export async function handle(req: Request, env: Env): Promise<Response> {
+  try {
+    const user = await authenticate(req, env);
+    if (!user) return json({ error: "unauthorized" }, 401);
+    // Custom header blocks cross-site form posts riding the Access cookie (CSRF).
+    if (req.method !== "GET" && req.headers.get("X-Drill") !== "1") {
+      return json({ error: "forbidden" }, 403);
+    }
+    const url = new URL(req.url);
+    const route = ROUTES[`${req.method} ${url.pathname}`];
+    if (!route) return json({ error: "not found" }, 404);
+    return await route({ req, env, url, user });
+  } catch (e) {
+    if (e instanceof HttpError) return json({ error: e.message }, e.status);
+    console.error(e);
+    return json({ error: "internal error" }, 500);
+  }
+}
+
+export default { fetch: handle };

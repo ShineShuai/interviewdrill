@@ -1,0 +1,22 @@
+name = "drill"
+main = "src/index.ts"
+compatibility_date = "2026-09-16"
+
+[assets]
+directory = "./public"
+run_worker_first = ["/api/*"]
+
+[ai]
+binding = "AI"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "drill"
+database_id = "REPLACE_WITH_ID_FROM_d1_create"
+
+[vars]
+MODEL = "claude-sonnet-5-5"
+DAILY_CAP = "200"
+# Cloudflare Access application protecting this Worker's hostname (fail closed if empty).
+TEAM_DOMAIN = ""  # https://<team>.cloudflareaccess.com
+ACCESS_AUD = ""   # application AUD tag
