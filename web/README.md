@@ -33,8 +33,8 @@ npm run db:init:local && npm run cards:local && npm run dev
 `npm run cards` also publishes approved `katas/` and `bugs/` entries as cards with ids `kata:<id>`
 and `bug:<id>` (topics `katas`, `bugs`; needs `python3`, override with `PYTHON`). The sync fails
 if the export fails, because a silent skip would prune them from D1.
-- Bugs: read the numbered C++, explain the class, cause and fix. Graded against the verified
-  sanitizer report and diff.
+- Bugs: read the numbered C++ or Go, explain the class, cause and fix. Graded against the
+  verified tool report (sanitizer, race detector or runtime) and diff.
 - Katas: explain algorithm, complexity and edge cases (code optional). Graded against the verified
   reference solution and the known wrong approaches. Nothing is executed on the web; run
   `kata.py solve` locally for tests.

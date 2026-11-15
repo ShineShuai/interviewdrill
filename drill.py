@@ -126,9 +126,10 @@ def read_answer() -> str:
 
 
 HINTS = {
-    "bug:": "This is a debugging exercise. The reference is verified ground truth (a sanitizer "
-            "report and a minimal fix). 'correct' = names the bug class and root cause; 'depth' "
-            "= a valid fix and why it works (any correct fix counts); 'clarity' = communication.",
+    "bug:": "This is a debugging exercise. The reference is verified ground truth (a sanitizer, "
+            "race detector or runtime report, and a minimal fix). 'correct' = names the bug "
+            "class and root cause; 'depth' = a valid fix and why it works (any correct fix "
+            "counts); 'clarity' = communication.",
     "kata:": "This is a coding exercise answered as an approach, pseudocode or code. The "
              "reference solution is verified. 'correct' = would give right answers within the "
              "limits (equal or better algorithms count); 'depth' = complexity and edge cases; "
