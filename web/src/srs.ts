@@ -28,3 +28,19 @@ export function streak(days: string[], today: string): number {
   }
   return n;
 }
+
+const DAY_MS = 86_400_000;
+
+/**
+ * Rebuild a card's schedule from its attempts, oldest first: the same fold as live scheduling,
+ * so every device that has the same attempts ends in the same state. Null if there are none.
+ */
+export function replay(
+  attempts: { ts: string; q: number }[],
+): (CardState & { due: string }) | null {
+  if (attempts.length === 0) return null;
+  let state: CardState = { ease: 2.5, interval: 0, reps: 0 };
+  for (const a of attempts) state = schedule(state, a.q);
+  const last = Date.parse(attempts[attempts.length - 1].ts);
+  return { ...state, due: iso(new Date(last + state.interval * DAY_MS)) };
+}

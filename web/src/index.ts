@@ -2,7 +2,7 @@ import { authenticate } from "./auth.ts";
 import type { Env } from "./env.ts";
 import { HttpError, json } from "./http.ts";
 import { judge, score } from "./judge.ts";
-import { iso, schedule, streak, type CardState } from "./srs.ts";
+import { iso, replay, schedule, streak, type CardState } from "./srs.ts";
 
 interface Ctx {
   req: Request;
@@ -242,11 +242,139 @@ const exportAll: Handler = async ({ env, user }) => {
   );
 };
 
+// --- CLI sync: attempts are append-only events; a card's schedule is the replay of its events ---
+const SYNC_KEY = /^(kata|bug):/;
+const SYNC_TS = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/;
+const MAX_SYNC = 200;
+
+interface SyncAttempt {
+  uid: string;
+  key: string;
+  ts: string;
+  q: number;
+  passed: number | null;
+  total: number | null;
+  secs: number;
+}
+
+function parseSyncAttempt(raw: unknown, i: number): SyncAttempt {
+  const bad = (why: string): never => {
+    throw new HttpError(400, `attempts[${i}]: ${why}`);
+  };
+  if (!raw || typeof raw !== "object") return bad("not an object");
+  const a = raw as Record<string, unknown>;
+  if (typeof a.uid !== "string" || a.uid.length < 1 || a.uid.length > 80) bad("bad uid");
+  if (typeof a.key !== "string" || !SYNC_KEY.test(a.key)) bad("key must be kata:* or bug:*");
+  if (typeof a.ts !== "string" || !SYNC_TS.test(a.ts)) bad("ts must be UTC ...Z, seconds only");
+  if (typeof a.q !== "number" || !(a.q >= 0 && a.q <= 5)) bad("q must be 0..5");
+  const given = a.passed !== undefined && a.passed !== null;
+  if (given && !(Number.isInteger(a.passed) && Number.isInteger(a.total))) bad("bad counts");
+  const passed = given ? (a.passed as number) : null;
+  const total = given ? (a.total as number) : null;
+  if (passed !== null && total !== null && !(passed >= 0 && passed <= total && total <= 1000)) {
+    bad("bad counts");
+  }
+  return {
+    uid: a.uid as string, key: a.key as string, ts: a.ts as string, q: a.q as number, passed,
+    total, secs: Math.min(3600, Math.max(0, Number(a.secs) || 0)),
+  };
+}
+
+/** Rebuild card_state of these cards from their attempts. */
+async function recompute(env: Env, user: string, cardIds: string[]): Promise<void> {
+  for (const id of cardIds) {
+    const rows = await env.DB.prepare(
+      "SELECT ts, COALESCE(score, 0) AS q FROM attempts " +
+        "WHERE user_id = ?1 AND card_id = ?2 ORDER BY ts, id",
+    )
+      .bind(user, id)
+      .all<{ ts: string; q: number }>();
+    const s = replay(rows.results);
+    if (!s) continue;
+    await env.DB.prepare(
+      "INSERT INTO card_state(user_id, card_id, ease, interval, reps, due) " +
+        "VALUES(?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT(user_id, card_id) " +
+        "DO UPDATE SET ease = ?3, interval = ?4, reps = ?5, due = ?6",
+    )
+      .bind(user, id, s.ease, s.interval, s.reps, s.due)
+      .run();
+  }
+}
+
+const syncPush: Handler = async ({ req, env, user }) => {
+  const body = await readJson(req);
+  const list = body.attempts;
+  if (!Array.isArray(list) || list.length > MAX_SYNC) {
+    throw new HttpError(400, `attempts must be a list of at most ${MAX_SYNC}`);
+  }
+  const attempts = list.map(parseSyncAttempt);
+  const cards = await env.DB.prepare(
+    "SELECT id FROM cards WHERE id LIKE 'kata:%' OR id LIKE 'bug:%'",
+  ).all<{ id: string }>();
+  const known = new Set(cards.results.map((c) => c.id));
+  const skipped = new Set<string>();
+  const accepted = attempts.filter((a) => known.has(a.key) || !skipped.add(a.key));
+  const results = await env.DB.batch(
+    accepted.map((a) =>
+      env.DB.prepare(
+        "INSERT OR IGNORE INTO attempts(user_id, card_id, ts, secs, answer, correct, depth, " +
+          "clarity, score, detail, uid) " +
+          "VALUES(?1, ?2, ?3, ?4, '(cli)', ?5, NULL, NULL, ?6, ?7, ?8)",
+      ).bind(
+        user, a.key, a.ts, a.secs,
+        a.passed !== null && a.total ? Math.round((5 * a.passed) / a.total) : Math.round(a.q),
+        a.q, JSON.stringify({ mode: "cli", passed: a.passed, total: a.total }), a.uid,
+      ),
+    ),
+  );
+  const inserted = accepted.filter((_, i) => (results[i].meta?.changes ?? 0) > 0);
+  await recompute(env, user, [...new Set(inserted.map((a) => a.key))]);
+  return json({
+    accepted: inserted.length, duplicates: accepted.length - inserted.length,
+    skipped: [...skipped],
+  });
+};
+
+interface PulledRow {
+  id: number;
+  uid: string;
+  key: string;
+  ts: string;
+  q: number;
+  detail: string | null;
+}
+
+const syncPull: Handler = async ({ env, url, user }) => {
+  const after = clampInt(url.searchParams.get("after"), 0, Number.MAX_SAFE_INTEGER, 0);
+  const limit = clampInt(url.searchParams.get("limit"), 1, 500, 500);
+  const rows = await env.DB.prepare(
+    "SELECT id, COALESCE(uid, 'web:' || id) AS uid, card_id AS key, ts, " +
+      "COALESCE(score, 0) AS q, detail FROM attempts WHERE user_id = ?1 AND id > ?2 " +
+      "AND (card_id LIKE 'kata:%' OR card_id LIKE 'bug:%') ORDER BY id LIMIT ?3",
+  )
+    .bind(user, after, limit)
+    .all<PulledRow>();
+  const counts = (detail: string | null): { passed: number | null; total: number | null } => {
+    try {
+      const d = JSON.parse(detail ?? "null");
+      return Number.isInteger(d?.passed) && Number.isInteger(d?.total)
+        ? { passed: d.passed, total: d.total }
+        : { passed: null, total: null };
+    } catch {
+      return { passed: null, total: null };
+    }
+  };
+  const attempts = rows.results.map(({ detail, ...r }) => ({ ...r, ...counts(detail) }));
+  return json({ attempts, next: attempts.length ? attempts[attempts.length - 1].id : after });
+};
+
 const ROUTES: Record<string, Handler> = {
   "GET /api/status": status,
   "GET /api/next": next,
   "POST /api/attempt": attempt,
   "POST /api/kata/result": kataResult,
+  "POST /api/sync/push": syncPush,
+  "GET /api/sync/pull": syncPull,
   "POST /api/stt": stt,
   "GET /api/report": report,
   "GET /api/export": exportAll,
@@ -254,13 +382,18 @@ const ROUTES: Record<string, Handler> = {
 
 export async function handle(req: Request, env: Env): Promise<Response> {
   try {
-    const user = await authenticate(req, env);
-    if (!user) return json({ error: "unauthorized" }, 401);
+    const identity = await authenticate(req, env);
+    if (!identity) return json({ error: "unauthorized" }, 401);
+    const { user, machine } = identity;
     // Custom header blocks cross-site form posts riding the Access cookie (CSRF).
     if (req.method !== "GET" && req.headers.get("X-Drill") !== "1") {
       return json({ error: "forbidden" }, 403);
     }
     const url = new URL(req.url);
+    // A service token (the CLI) may only sync; everything else needs a signed-in person.
+    if (machine && !url.pathname.startsWith("/api/sync/")) {
+      return json({ error: "forbidden" }, 403);
+    }
     const route = ROUTES[`${req.method} ${url.pathname}`];
     if (!route) return json({ error: "not found" }, 404);
     return await route({ req, env, url, user });

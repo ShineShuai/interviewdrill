@@ -13,6 +13,7 @@
     "predeploy": "npm run vendor && npm run katas",
     "db:init": "wrangler d1 execute drill --remote --file schema.sql",
     "db:init:local": "wrangler d1 execute drill --local --file schema.sql",
+    "db:migrate-sync": "wrangler d1 execute drill --remote --file migrations/0002_sync.sql",
     "cards": "node scripts/sync-cards.ts --remote",
     "cards:local": "node scripts/sync-cards.ts --local"
   },

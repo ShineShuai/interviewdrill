@@ -1,0 +1,72 @@
+{
+  "attempts": [
+    {
+      "key": "kata:fixture-a",
+      "passed": 3,
+      "q": 1.0,
+      "secs": 0,
+      "total": 15,
+      "ts": "2026-11-01T09:00:00Z",
+      "uid": "fixture:1"
+    },
+    {
+      "key": "kata:fixture-a",
+      "passed": 12,
+      "q": 3.0,
+      "secs": 0,
+      "total": 15,
+      "ts": "2026-11-05T09:00:00Z",
+      "uid": "fixture:2"
+    },
+    {
+      "key": "kata:fixture-a",
+      "passed": 15,
+      "q": 5.0,
+      "secs": 0,
+      "total": 15,
+      "ts": "2026-11-02T09:00:00Z",
+      "uid": "fixture:3"
+    },
+    {
+      "key": "bug:fixture-b",
+      "passed": 4,
+      "q": 4.2,
+      "secs": 0,
+      "total": 5,
+      "ts": "2026-11-03T10:00:00Z",
+      "uid": "fixture:4"
+    },
+    {
+      "key": "bug:fixture-b",
+      "passed": 2,
+      "q": 2.5,
+      "secs": 0,
+      "total": 5,
+      "ts": "2026-11-03T10:00:00Z",
+      "uid": "fixture:5"
+    },
+    {
+      "key": "bug:fixture-b",
+      "passed": 5,
+      "q": 5.0,
+      "secs": 0,
+      "total": 5,
+      "ts": "2026-11-09T10:00:00Z",
+      "uid": "fixture:6"
+    }
+  ],
+  "expected": {
+    "bug:fixture-b": {
+      "due": "2026-11-10T10:00:00Z",
+      "ease": 2.4232,
+      "interval": 1.0,
+      "reps": 1
+    },
+    "kata:fixture-a": {
+      "due": "2026-11-08T09:00:00Z",
+      "ease": 2.26,
+      "interval": 3.0,
+      "reps": 2
+    }
+  }
+}

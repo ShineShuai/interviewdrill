@@ -8,6 +8,7 @@ interface Claims {
   nbf?: number;
   email?: string;
   sub?: string;
+  common_name?: string; // the client id of a service token
 }
 
 const ALG = { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" } as const;
@@ -72,12 +73,26 @@ export async function verifyAccessJwt(
 
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
-/** Returns the user id, or null if unauthenticated. Fails closed if auth is not configured. */
-export async function authenticate(req: Request, env: Env): Promise<string | null> {
-  if (env.DEV_USER && LOCAL_HOSTS.has(new URL(req.url).hostname)) return env.DEV_USER;
+export interface Identity {
+  user: string;
+  machine: boolean; // a service token: may only use the sync routes
+}
+
+/** Who is calling, or null if unauthenticated. Fails closed if auth is not configured. */
+export async function authenticate(req: Request, env: Env): Promise<Identity | null> {
+  if (env.DEV_USER && LOCAL_HOSTS.has(new URL(req.url).hostname)) {
+    return { user: env.DEV_USER, machine: false };
+  }
   if (!env.TEAM_DOMAIN || !env.ACCESS_AUD) throw new HttpError(500, "auth not configured");
   const token = req.headers.get("Cf-Access-Jwt-Assertion");
   if (!token) return null;
   const claims = await verifyAccessJwt(token, env.TEAM_DOMAIN.replace(/\/$/, ""), env.ACCESS_AUD);
-  return claims ? (claims.email ?? claims.sub ?? null) : null;
+  if (!claims) return null;
+  if (claims.email) return { user: claims.email, machine: false };
+  if (claims.common_name) {
+    // Only the one configured service token is accepted, and it acts as one fixed user.
+    const known = env.SYNC_CLIENT_ID && env.SYNC_USER && claims.common_name === env.SYNC_CLIENT_ID;
+    return known ? { user: env.SYNC_USER as string, machine: true } : null;
+  }
+  return claims.sub ? { user: claims.sub, machine: false } : null;
 }

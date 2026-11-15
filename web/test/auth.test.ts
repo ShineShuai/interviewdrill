@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import { authenticate, verifyAccessJwt } from "../src/auth.ts";
 import type { Env } from "../src/env.ts";
+import { handle } from "../src/index.ts";
+import { fakeD1 } from "./fake-d1.ts";
 
 const TEAM = "https://team.cloudflareaccess.com";
 const AUD = "aud-tag";
@@ -61,9 +63,76 @@ test("authenticate: header required, fails closed, DEV_USER only on localhost", 
   assert.equal(await authenticate(req("app.example.com"), env), null);
   const jwt = await token(good());
   const authed = req("app.example.com", { "Cf-Access-Jwt-Assertion": jwt });
-  assert.equal(await authenticate(authed, env), "me@x.org");
+  assert.deepEqual(await authenticate(authed, env), { user: "me@x.org", machine: false });
   await assert.rejects(authenticate(req("app.example.com"), {} as Env), { status: 500 });
   const dev = { DEV_USER: "dev" } as Env;
-  assert.equal(await authenticate(req("localhost"), dev), "dev");
+  assert.deepEqual(await authenticate(req("localhost"), dev), { user: "dev", machine: false });
   await assert.rejects(authenticate(req("app.example.com"), dev), { status: 500 });
+});
+
+test("service tokens: only the configured client id, acting as the configured user", async () => {
+  const env = {
+    TEAM_DOMAIN: TEAM, ACCESS_AUD: AUD, SYNC_CLIENT_ID: "abc.access", SYNC_USER: "me@x.org",
+  } as Env;
+  const as = async (claims: object, e: Env = env) => {
+    const jwt = await token({ iss: TEAM, aud: [AUD], exp: Date.now() / 1000 + 600, ...claims });
+    const req = new Request("https://app.example.com/api/sync/pull", {
+      headers: { "Cf-Access-Jwt-Assertion": jwt },
+    });
+    return authenticate(req, e);
+  };
+  assert.deepEqual(await as({ common_name: "abc.access", sub: "" }), {
+    user: "me@x.org", machine: true,
+  });
+  assert.equal(await as({ common_name: "other.access" }), null); // unknown service token
+  const off = (extra: object) => ({ ...env, ...extra }) as Env;
+  assert.equal(await as({ common_name: "abc.access" }, off({ SYNC_CLIENT_ID: "" })), null);
+  assert.equal(await as({ common_name: "abc.access" }, off({ SYNC_USER: "" })), null);
+  // a person is never treated as a machine, even if the claims also carry a common name
+  assert.deepEqual(await as({ email: "p@x.org", common_name: "abc.access" }), {
+    user: "p@x.org", machine: false,
+  });
+  assert.deepEqual(await as({ sub: "user-uuid" }), { user: "user-uuid", machine: false });
+  assert.equal(await as({}), null);
+});
+
+test("a service token reaches the sync routes as SYNC_USER and nothing else", async () => {
+  const db = fakeD1();
+  db.raw.exec("INSERT INTO cards VALUES('kata:a','katas','Q','- r')");
+  const env = {
+    DB: db as unknown as Env["DB"], TEAM_DOMAIN: TEAM, ACCESS_AUD: AUD,
+    SYNC_CLIENT_ID: "abc.access", SYNC_USER: "me@x.org", ANTHROPIC_API_KEY: "k",
+  } as Env;
+  const jwt = await token({
+    iss: TEAM, aud: [AUD], exp: Date.now() / 1000 + 600, common_name: "abc.access", sub: "",
+  });
+  const call = (path: string, init: RequestInit = {}) =>
+    handle(
+      new Request(`https://app.example.com${path}`, {
+        ...init,
+        headers: {
+          "Cf-Access-Jwt-Assertion": jwt, "X-Drill": "1", "Content-Type": "application/json",
+        },
+      }),
+      env,
+    );
+  const body = JSON.stringify({
+    attempts: [
+      { uid: "d:1", key: "kata:a", ts: "2026-11-01T09:00:00Z", q: 5, passed: 1, total: 1 },
+    ],
+  });
+  const pushed = await call("/api/sync/push", { method: "POST", body });
+  assert.equal(pushed.status, 200);
+  const row = db.raw.prepare("SELECT user_id FROM attempts").get() as { user_id: string };
+  assert.equal(row.user_id, "me@x.org");
+  assert.equal((await call("/api/sync/pull")).status, 200);
+  for (const [path, init] of [
+    ["/api/status", {}], ["/api/export", {}],
+    ["/api/attempt", { method: "POST", body: "{}" }], ["/api/stt", { method: "POST", body: "x" }],
+    ["/api/kata/result", { method: "POST", body: "{}" }],
+  ] as [string, RequestInit][]) {
+    assert.equal((await call(path, init)).status, 403, path);
+  }
+  const anon = await handle(new Request("https://app.example.com/api/sync/pull"), env);
+  assert.equal(anon.status, 401);
 });

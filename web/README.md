@@ -53,3 +53,17 @@ worker. The result (passed/total) updates the card's schedule like `kata.py solv
   about `eval`, the Pyodide build in use needs `'unsafe-eval'` as well; add it to `_headers`.
 - Not for code you do not trust: the runner blocks `fetch` and friends but is not a sandbox
   against a hostile program.
+
+## CLI sync (kata and bug progress)
+`sync.py` shares attempts between the CLI and the web app: attempts are append-only events,
+each side rebuilds a card's schedule by replaying them in time order, so devices converge.
+`kata.py solve` and `bugs.py next` run it automatically when `DRILL_URL` is set.
+1. Existing database: `npm run db:migrate-sync` once (adds `attempts.uid`; fresh ones have it).
+2. Zero Trust > Access > Service auth: create a service token; add a policy with action
+   "Service Auth" and that token to the same application. Copy Client ID and Client Secret.
+3. `wrangler.toml`: `SYNC_CLIENT_ID` = the Client ID, `SYNC_USER` = your Access email. Deploy.
+   The token may only call `/api/sync/*`, and acts as `SYNC_USER`.
+4. CLI: `export DRILL_URL=https://<worker host> DRILL_CLIENT_ID=... DRILL_CLIENT_SECRET=...`
+   then `./sync.py` (or `./sync.py --status`). `wrangler dev` needs no token.
+Only `kata:` and `bug:` cards sync. A kata that is not published (`npm run cards`) stays
+pending in the CLI and is retried on the next sync.

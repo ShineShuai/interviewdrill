@@ -354,6 +354,7 @@ def practice(db, category: str | None = None, rng=random) -> bool:
     days = kata.record(db, f"bug:{bid}", q, round(q), 5, json.dumps(g))
     drill.show(g, q, days)
     print(f"\nground truth:\n{ground_truth(meta)}")
+    kata.autosync(db)
     return True
 
 

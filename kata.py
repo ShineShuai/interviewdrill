@@ -19,6 +19,7 @@ import re
 import shutil
 import sqlite3
 import sys
+import uuid
 from collections import Counter
 from pathlib import Path
 
@@ -36,7 +37,9 @@ CREATE TABLE IF NOT EXISTS ex_state(
   key TEXT PRIMARY KEY, ease REAL DEFAULT 2.5, interval REAL DEFAULT 0,
   reps INTEGER DEFAULT 0, due TEXT DEFAULT '');
 CREATE TABLE IF NOT EXISTS ex_attempts(
-  id INTEGER PRIMARY KEY, key TEXT, ts TEXT, passed INTEGER, total INTEGER, detail TEXT);
+  id INTEGER PRIMARY KEY, key TEXT, ts TEXT, passed INTEGER, total INTEGER, detail TEXT,
+  q REAL, uid TEXT, pushed INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS sync_state(key TEXT PRIMARY KEY, value TEXT);
 """
 
 PROPOSE_SYSTEM = """You design programming-interview exercises with machine-checkable tests.
@@ -200,10 +203,33 @@ def make_kata(topic, difficulty, avoid, propose_fn=propose, repairs=2, **vkw):
     return None, reason
 
 
-# --- progress (shared with bugs.py) ---
+# --- progress (shared with bugs.py and sync.py) ---
+def device_id(db) -> str:
+    """Stable random id of this database; prefixes the uid of every attempt made here."""
+    row = db.execute("SELECT value FROM sync_state WHERE key = 'device_id'").fetchone()
+    if row:
+        return row[0]
+    dev = uuid.uuid4().hex[:8]
+    db.execute("INSERT INTO sync_state VALUES('device_id', ?)", (dev,))
+    return dev
+
+
+def migrate(db) -> None:
+    """Bring a database created before sync existed up to date (idempotent)."""
+    cols = {r[1] for r in db.execute("PRAGMA table_info(ex_attempts)")}
+    for name, ddl in (("q", "REAL"), ("uid", "TEXT"), ("pushed", "INTEGER DEFAULT 0")):
+        if name not in cols:
+            db.execute(f"ALTER TABLE ex_attempts ADD COLUMN {name} {ddl}")
+    db.execute("CREATE UNIQUE INDEX IF NOT EXISTS ex_attempts_uid ON ex_attempts(uid)")
+    # attempts from before sync were made on this device and have not been pushed
+    db.execute("UPDATE ex_attempts SET uid = ? || ':' || id WHERE uid IS NULL", (device_id(db),))
+    db.commit()
+
+
 def connect() -> sqlite3.Connection:
     db = drill.connect()
     db.executescript(SCHEMA)
+    migrate(db)
     return db
 
 
@@ -217,10 +243,25 @@ def record(db, key: str, q: float, passed: int, total: int, detail: str = "") ->
         "reps = excluded.reps, due = excluded.due",
         (key, ease, interval, reps, drill.now(interval)),
     )
-    db.execute("INSERT INTO ex_attempts(key, ts, passed, total, detail) VALUES(?,?,?,?,?)",
-               (key, drill.now(), passed, total, detail))
+    db.execute("INSERT INTO ex_attempts(key, ts, passed, total, detail, q, uid, pushed) "
+               "VALUES(?,?,?,?,?,?,?,0)",
+               (key, drill.now(), passed, total, detail, q,
+                f"{device_id(db)}:{uuid.uuid4().hex[:12]}"))
     db.commit()
     return interval
+
+
+def autosync(db) -> None:
+    """Best-effort sync after a practice session; a failure never breaks the session."""
+    if not os.environ.get("DRILL_URL"):
+        return
+    try:
+        import sync  # lazy: sync.py imports this module
+
+        stats = sync.sync(db, sync.transport_from_env())
+        print(f"synced: pushed {stats['pushed']}, pulled {stats['pulled']}")
+    except Exception as exc:  # noqa: BLE001 - never fail a practice session over sync
+        print(f"sync skipped: {exc}")
 
 
 def pick(db, kind: str, ids: list[str], rng=random) -> str | None:
@@ -367,8 +408,10 @@ def cmd_solve(a):
         raise SystemExit("usage: kata.py solve ID [--reveal] -- CMD ... (ID must be approved)")
     passed, total = summarize(run_tests(kdir, cmd), a.reveal)
     q = 5 if passed == total else 3 if passed >= 0.8 * total else 1
-    days = record(connect(), f"kata:{a.id}", q, passed, total)
+    db = connect()
+    days = record(db, f"kata:{a.id}", q, passed, total)
     print(f"{passed}/{total} passed; next review in {days:.0f}d")
+    autosync(db)
 
 
 def cmd_status(a):

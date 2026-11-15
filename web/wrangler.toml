@@ -20,3 +20,6 @@ DAILY_CAP = "200"
 # Cloudflare Access application protecting this Worker's hostname (fail closed if empty).
 TEAM_DOMAIN = ""  # https://<team>.cloudflareaccess.com
 ACCESS_AUD = ""   # application AUD tag
+# CLI sync (kata/bug progress): an Access service token allowed by the application's policy.
+SYNC_CLIENT_ID = ""  # the token's Client ID; empty disables machine access
+SYNC_USER = ""       # your Access email: the user the CLI acts as

@@ -22,8 +22,12 @@ class Stmt {
   async all(): Promise<{ results: unknown[] }> {
     return { results: this.db.prepare(this.sql).all(...this.args) };
   }
-  runSync(): void {
-    this.db.prepare(this.sql).run(...this.args);
+  runSync(): { changes: number } {
+    const r = this.db.prepare(this.sql).run(...this.args);
+    return { changes: Number(r.changes) };
+  }
+  async run(): Promise<{ meta: { changes: number } }> {
+    return { meta: this.runSync() };
   }
 }
 
@@ -36,13 +40,13 @@ export function fakeD1() {
     batch: async (stmts: Stmt[]) => {
       db.exec("BEGIN");
       try {
-        stmts.forEach((s) => s.runSync());
+        const results = stmts.map((s) => ({ meta: s.runSync() }));
         db.exec("COMMIT");
+        return results;
       } catch (e) {
         db.exec("ROLLBACK");
         throw e;
       }
-      return [];
     },
   };
 }
