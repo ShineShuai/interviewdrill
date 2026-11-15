@@ -39,3 +39,17 @@ if the export fails, because a silent skip would prune them from D1.
   reference solution and the known wrong approaches. Nothing is executed on the web; run
   `kata.py solve` locally for tests.
 - The reference is shown after grading, never before.
+
+## Python katas in the browser
+Paste a Python solution (reads stdin, writes stdout) into a `kata:` card and press "Run as Python":
+the verified tests run in a Web Worker with Pyodide, the network disabled, and a per-test time
+limit of 5x the CLI limit (WebAssembly is slower). A runaway program is killed by terminating the
+worker. The result (passed/total) updates the card's schedule like `kata.py solve` does.
+- `npm install` fetches Pyodide (`^0.27`); `npm run vendor` copies it to `public/pyodide/`.
+- `npm run katas` writes `public/katas/<id>.json` (tests) from `../katas`. Both run before
+  `npm run dev` and `npm run deploy`, and both folders are git-ignored.
+- The tests are plain static files, so the solution can peek at them; fine for one user.
+- CSP allows `wasm-unsafe-eval` for the runtime. If the browser console reports a CSP error
+  about `eval`, the Pyodide build in use needs `'unsafe-eval'` as well; add it to `_headers`.
+- Not for code you do not trust: the runner blocks `fetch` and friends but is not a sandbox
+  against a hostile program.

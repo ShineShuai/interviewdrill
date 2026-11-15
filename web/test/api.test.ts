@@ -133,6 +133,42 @@ test("exercise cards: grader gets the kind hint and multi-line question round-tr
   assert.ok(!(await topics()).includes("bugs")); // answered, so no longer due
 });
 
+test("kata result from the browser runner: graded by pass ratio, no LLM involved", async () => {
+  db.raw.prepare("INSERT INTO cards VALUES('kata:max', 'katas', 'Kata: x', '- ref')").run();
+  const result = async (passed: number, total: number) => {
+    const res = await post("/api/kata/result", { card_id: "kata:max", passed, total, secs: 40 });
+    assert.equal(res.status, 200);
+    return (await res.json()) as { score: number; interval: number };
+  };
+  assert.deepEqual(await result(15, 15), { score: 5, interval: 1, passed: 15, total: 15 });
+  assert.deepEqual(await result(12, 15), { score: 3, interval: 3, passed: 12, total: 15 });
+  assert.deepEqual(await result(3, 15), { score: 1, interval: 1, passed: 3, total: 15 });
+  const all = db.raw.prepare("SELECT * FROM attempts ORDER BY id").all();
+  const rows = all as Record<string, unknown>[];
+  assert.equal(rows.length, 3);
+  assert.deepEqual(
+    [rows[2].answer, rows[2].correct, rows[2].depth, rows[2].score, rows[2].secs],
+    ["(browser tests)", 1, null, 1, 40],
+  );
+  assert.deepEqual(JSON.parse(String(rows[2].detail)), { mode: "browser", passed: 3, total: 15 });
+  assert.equal(sent.length, 0);
+  const state = db.raw.prepare("SELECT reps FROM card_state WHERE card_id = 'kata:max'").get();
+  assert.deepEqual({ ...state }, { reps: 0 }); // the failing run reset the card
+});
+
+test("kata result validates its input", async () => {
+  db.raw.prepare("INSERT INTO cards VALUES('kata:max', 'katas', 'Kata: x', '- ref')").run();
+  const status = async (body: object) => (await post("/api/kata/result", body)).status;
+  assert.equal(await status({ card_id: "go-chan", passed: 1, total: 1 }), 400); // not a kata
+  assert.equal(await status({ card_id: "kata:max", passed: 1, total: 0 }), 400);
+  assert.equal(await status({ card_id: "kata:max", passed: 5, total: 4 }), 400);
+  assert.equal(await status({ card_id: "kata:max", passed: -1, total: 4 }), 400);
+  assert.equal(await status({ card_id: "kata:max", passed: "x", total: 4 }), 400);
+  assert.equal(await status({ card_id: "kata:max", passed: 1, total: 5000 }), 400);
+  assert.equal(await status({ card_id: "kata:nope", passed: 1, total: 1 }), 404);
+  assert.equal((await call("/api/kata/result", { method: "POST", body: "[" })).status, 400);
+});
+
 test("grader failure maps to 502 and stores nothing", async () => {
   globalThis.fetch = (async () => new Response("boom", { status: 500 })) as typeof fetch;
   assert.equal((await post("/api/attempt", { card_id: "c1", answer: "a" })).status, 502);

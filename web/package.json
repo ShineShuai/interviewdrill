@@ -6,7 +6,11 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "typecheck": "tsc",
-    "test": "node --test test/*.test.ts",
+    "test": "node --test test/*.test.ts test/*.test.js",
+    "vendor": "node scripts/vendor-pyodide.mjs",
+    "katas": "python3 ../export_cards.py --tests public/katas",
+    "predev": "npm run vendor && npm run katas",
+    "predeploy": "npm run vendor && npm run katas",
     "db:init": "wrangler d1 execute drill --remote --file schema.sql",
     "db:init:local": "wrangler d1 execute drill --local --file schema.sql",
     "cards": "node scripts/sync-cards.ts --remote",
@@ -15,6 +19,7 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^4",
     "@types/node": "^22",
+    "pyodide": "^0.27.0",
     "typescript": "^5.8",
     "wrangler": "^4"
   }

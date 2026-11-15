@@ -54,6 +54,45 @@ function toBase64(buf: ArrayBuffer): string {
   return btoa(s);
 }
 
+interface Outcome {
+  secs: number;
+  answer: string;
+  correct: number | null;
+  depth: number | null;
+  clarity: number | null;
+  detail: unknown;
+}
+
+/** Reschedule the card from quality q and store its state and the attempt in one batch. */
+async function recordAttempt(
+  env: Env, user: string, cardId: string, q: number, o: Outcome,
+): Promise<CardState> {
+  const state =
+    (await env.DB.prepare(
+      "SELECT ease, interval, reps FROM card_state WHERE user_id = ?1 AND card_id = ?2",
+    )
+      .bind(user, cardId)
+      .first<CardState>()) ?? NEW_STATE;
+  const nx = schedule(state, q);
+  const now = new Date();
+  const due = iso(new Date(+now + nx.interval * DAY_MS));
+  await env.DB.batch([
+    env.DB.prepare(
+      "INSERT INTO card_state(user_id, card_id, ease, interval, reps, due) " +
+        "VALUES(?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT(user_id, card_id) " +
+        "DO UPDATE SET ease = ?3, interval = ?4, reps = ?5, due = ?6",
+    ).bind(user, cardId, nx.ease, nx.interval, nx.reps, due),
+    env.DB.prepare(
+      "INSERT INTO attempts(user_id, card_id, ts, secs, answer, correct, depth, clarity, " +
+        "score, detail) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+    ).bind(
+      user, cardId, iso(now), o.secs, o.answer, o.correct, o.depth, o.clarity, q,
+      JSON.stringify(o.detail),
+    ),
+  ]);
+  return nx;
+}
+
 const status: Handler = async ({ env, user }) => {
   const now = iso(new Date());
   const today = now.slice(0, 10);
@@ -113,30 +152,34 @@ const attempt: Handler = async ({ req, env, user }) => {
   await takeQuota(env, user);
   const grade = await judge(env, card, answer);
   const q = score(grade);
-  const state =
-    (await env.DB.prepare(
-      "SELECT ease, interval, reps FROM card_state WHERE user_id = ?1 AND card_id = ?2",
-    )
-      .bind(user, cardId)
-      .first<CardState>()) ?? NEW_STATE;
-  const nx = schedule(state, q);
-  const now = new Date();
-  const due = iso(new Date(+now + nx.interval * DAY_MS));
-  await env.DB.batch([
-    env.DB.prepare(
-      "INSERT INTO card_state(user_id, card_id, ease, interval, reps, due) " +
-        "VALUES(?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT(user_id, card_id) " +
-        "DO UPDATE SET ease = ?3, interval = ?4, reps = ?5, due = ?6",
-    ).bind(user, cardId, nx.ease, nx.interval, nx.reps, due),
-    env.DB.prepare(
-      "INSERT INTO attempts(user_id, card_id, ts, secs, answer, correct, depth, clarity, " +
-        "score, detail) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-    ).bind(
-      user, cardId, iso(now), secs, answer,
-      grade.correct, grade.depth, grade.clarity, q, JSON.stringify(grade),
-    ),
-  ]);
+  const nx = await recordAttempt(env, user, cardId, q, {
+    secs, answer, correct: grade.correct, depth: grade.depth, clarity: grade.clarity,
+    detail: grade,
+  });
   return json({ grade, score: q, interval: nx.interval, ref: card.ref });
+};
+
+/** A kata run by the in-browser Python runner: no LLM, the client reports passed/total. */
+const kataResult: Handler = async ({ req, env, user }) => {
+  const body = await readJson(req);
+  const cardId = String(body.card_id ?? "");
+  const passed = Math.trunc(Number(body.passed));
+  const total = Math.trunc(Number(body.total));
+  if (!cardId.startsWith("kata:")) throw new HttpError(400, "not a kata");
+  if (!(total >= 1 && total <= 1000 && passed >= 0 && passed <= total)) {
+    throw new HttpError(400, "invalid counts");
+  }
+  const found = await env.DB.prepare("SELECT 1 AS found FROM cards WHERE id = ?1")
+    .bind(cardId)
+    .first();
+  if (!found) throw new HttpError(404, "unknown card");
+  const q = passed === total ? 5 : passed >= 0.8 * total ? 3 : 1;
+  const nx = await recordAttempt(env, user, cardId, q, {
+    secs: Math.min(3600, Math.max(0, Number(body.secs) || 0)), answer: "(browser tests)",
+    correct: Math.round((5 * passed) / total), depth: null, clarity: null,
+    detail: { mode: "browser", passed, total },
+  });
+  return json({ score: q, passed, total, interval: nx.interval });
 };
 
 const stt: Handler = async ({ req, env, user }) => {
@@ -203,6 +246,7 @@ const ROUTES: Record<string, Handler> = {
   "GET /api/status": status,
   "GET /api/next": next,
   "POST /api/attempt": attempt,
+  "POST /api/kata/result": kataResult,
   "POST /api/stt": stt,
   "GET /api/report": report,
   "GET /api/export": exportAll,

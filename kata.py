@@ -295,6 +295,16 @@ def card_for(meta: dict, kdir: Path) -> dict:
             "ref": "\n".join(ref)}
 
 
+def tests_payload(kdir: Path) -> dict:
+    """Tests of one kata for the browser runner (web/public/katas/<id>.json)."""
+    meta = json.loads((kdir / "kata.json").read_text())
+    group = lambda p: re.match(r"[a-z]+", p.stem).group()  # noqa: E731
+    files = sorted((kdir / "tests").glob("*.in"), key=lambda p: (GROUPS.index(group(p)), p.stem))
+    return {"id": meta["id"], "time_limit": meta["time_limit"],
+            "tests": [{"name": f.stem, "input": f.read_text(),
+                       "expected": f.with_suffix(".out").read_text()} for f in files]}
+
+
 def review() -> Counter:
     done: Counter = Counter()
     for work in sorted(p.parent for p in PENDING.glob("*/kata.json")):

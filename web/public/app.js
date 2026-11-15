@@ -141,7 +141,7 @@ async function drill(topic, n) {
   }
   for (const [i, card] of cards.entries()) {
     const result = await ask(card, `${i + 1}/${cards.length}`);
-    await review(result, i + 1 === cards.length);
+    if (result) await review(result, i + 1 === cards.length);
   }
   await home();
 }
@@ -161,6 +161,12 @@ function ask(card, label) {
     const msg = h("p", { class: "err" });
     const mic = h("button", { onclick: () => toggleMic(mic, box, msg) }, "Record");
     const send = h("button", { class: "primary" }, "Submit");
+    const kata = card.id.startsWith("kata:");
+    const panel = h("div", { class: "panel" });
+    const reveal = h("input", { type: "checkbox" });
+    const run = h("button", {}, "Run as Python");
+    run.addEventListener("click", () => runKata(card, box, panel, run, reveal.checked));
+    const skip = h("button", { onclick: () => resolve(null) }, "Next");
     const submit = async () => {
       if (!box.value.trim()) return;
       send.disabled = true;
@@ -197,11 +203,65 @@ function ask(card, label) {
         mic,
       ),
       box,
+      kata
+        ? h("div", { class: "row" }, run, h("label", { class: "inline" }, reveal, "reveal"))
+        : null,
       send,
+      kata ? skip : null,
+      kata ? panel : null,
       msg,
     );
     box.focus();
   });
+}
+
+const detailText = (d) => `input:\n${d.input}\nexpected: ${d.expected}\ngot: ${d.got}`;
+
+// Katas: paste a Python solution (stdin -> stdout) and run the verified tests in the browser.
+async function runKata(card, box, panel, btn, reveal) {
+  if (!box.value.trim()) return;
+  btn.disabled = true;
+  const note = (text, cls = "dim") => panel.replaceChildren(h("p", { class: cls }, text));
+  try {
+    note("Loading tests and the Python runtime (first run downloads about 10 MB)…");
+    const res = await fetch(`/katas/${card.id.slice(5)}.json`);
+    if (!res.ok) throw new Error("no tests for this kata; run `npm run katas` and redeploy");
+    const spec = await res.json();
+    const { runTests, summarize } = await import("/runner-core.js");
+    const { spawnWorker } = await import("/runner.js");
+    const t0 = performance.now();
+    const results = await runTests({
+      code: box.value, tests: spec.tests, timeLimitS: spec.time_limit, spawn: spawnWorker,
+      onProgress: (i, n) => note(`Running test ${i}/${n}…`),
+    });
+    const s = summarize(results, reveal);
+    const saved = await api("/api/kata/result", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        card_id: card.id, passed: s.passed, total: s.total, secs: (performance.now() - t0) / 1000,
+      }),
+    });
+    const f = s.failure;
+    panel.replaceChildren(
+      h("h3", {}, `${s.passed}/${s.total} passed`),
+      h("p", {}, s.groups.map((g) => `${g.group} ${g.ok}/${g.n}`).join("   ")),
+      f
+        ? h("p", { class: "err" }, `first failure: ${f.name} ${f.verdict} (${f.secs.toFixed(2)}s)`)
+        : null,
+      f && f.err ? h("pre", {}, f.err) : null,
+      f && f.detail
+        ? h("pre", {}, detailText(f.detail))
+        : f
+          ? h("p", { class: "dim" }, "hidden test: tick “reveal” and run again to see it")
+          : null,
+      h("p", { class: "dim" }, `next review in ${Math.round(saved.interval)} d`),
+    );
+  } catch (e) {
+    note(`${errText(e)} (Python runner: did you run npm run vendor, then deploy?)`, "err");
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 function review({ grade: g, score, interval, ref }, last) {

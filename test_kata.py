@@ -187,6 +187,21 @@ class PracticeTest(Base):
         self.assertIn("best = cur = a[0]", card["ref"])  # the reference solution
         self.assertIn("Known wrong approach 2 (fails the tests)", card["ref"])
 
+    def test_tests_payload_and_export(self):
+        payload = kata.tests_payload(kata.KATAS / self.kid)
+        self.assertEqual((payload["id"], payload["time_limit"]), (self.kid, 2.0))
+        names = [t["name"] for t in payload["tests"]]
+        self.assertEqual(names[:3], ["ex1", "ex2", "small01"])
+        self.assertEqual(names[-1], "large1")
+        self.assertEqual(payload["tests"][0], {"name": "ex1", "input": "5\n1 -2 3 4 -1\n",
+                                               "expected": "7\n"})
+        out = Path(self.tmp.name) / "web-tests"
+        out.mkdir()
+        (out / "gone.json").write_text("{}")
+        self.assertEqual(export_cards.export_tests(out), [self.kid])
+        self.assertEqual([p.name for p in out.glob("*.json")], [f"{self.kid}.json"])
+        self.assertEqual(json.loads((out / f"{self.kid}.json").read_text()), payload)
+
     def test_export_includes_only_approved_exercises(self):
         pending = kata.PENDING / "later"
         pending.mkdir(parents=True, exist_ok=True)

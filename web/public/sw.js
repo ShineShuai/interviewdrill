@@ -1,5 +1,5 @@
 // Network-first for the app shell, cached copy when offline. API calls are never cached.
-const CACHE = "drill-v1";
+const CACHE = "drill-v2";
 const SHELL = ["/", "/app.js", "/style.css", "/icon.svg", "/manifest.webmanifest"];
 
 self.addEventListener("install", (e) =>
