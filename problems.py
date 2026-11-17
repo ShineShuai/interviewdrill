@@ -9,7 +9,8 @@
 
 Verification: reference == brute force on random small inputs, the statement examples match
 the reference, the reference fits the time limit on large inputs, and the known-wrong
-solutions fail the tests. Env: ANTHROPIC_API_KEY, DRILL_GEN_MODEL, DRILL_PROBLEMS, DRILL_SANDBOX.
+solutions fail the tests. The model comes from llm.py (Anthropic, any OpenAI-compatible
+endpoint, or claude.ai by copy and paste). Env: DRILL_PROBLEMS, DRILL_SANDBOX, DRILL_LLM*.
 """
 import argparse
 import json
@@ -25,6 +26,7 @@ from pathlib import Path
 
 import drill
 import gen
+import llm
 import sandbox
 
 PROBLEMS = Path(os.environ.get("DRILL_PROBLEMS", Path(__file__).parent / "problems"))
@@ -173,7 +175,7 @@ def propose(topic, difficulty, avoid, prev=None, feedback=None) -> dict:
     if feedback:
         prompt += (f"\nYour previous attempt failed verification: {feedback}\n"
                    f"Previous attempt:\n{json.dumps(prev)}\nReturn a corrected, complete problem.")
-    return gen.call_tool(PROPOSE_SYSTEM, PROPOSE_TOOL, prompt, max_tokens=6000)
+    return llm.call_tool(PROPOSE_SYSTEM, PROPOSE_TOOL, prompt, max_tokens=6000)
 
 
 def make_problem(topic, difficulty, avoid, propose_fn=propose, repairs=2, **vkw):
@@ -195,7 +197,7 @@ def make_problem(topic, difficulty, avoid, propose_fn=propose, repairs=2, **vkw)
                     "statement": spec["statement"], "examples": spec["examples"][:3],
                     "approach": str(spec.get("approach") or "").strip(),
                     "time_limit": report["time_limit"],
-                    "provenance": {"model": gen.MODEL, "verified": report}}
+                    "provenance": {"model": llm.describe(), "verified": report}}
             (work / "problem.json").write_text(json.dumps(meta, indent=2))
             return work, ""
         shutil.rmtree(work, ignore_errors=True)

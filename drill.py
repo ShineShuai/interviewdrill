@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""drill: spaced-repetition interview practice with LLM rubric grading.
+"""drill: spaced-repetition interview practice with model or self grading.
 
 Usage: drill.py daily [-n 5] [-t topic] [--speak] | drill.py report [-d 14]
-Env: ANTHROPIC_API_KEY, DRILL_HOME (~/.drill), DRILL_CARDS, DRILL_MODEL,
-     DRILL_STT (shell command that records and prints a transcript).
+Grading uses the language model configured in llm.py (Anthropic, any OpenAI-compatible
+endpoint, or claude.ai by copy and paste); without one you tick a checklist yourself.
+Env: DRILL_HOME (~/.drill), DRILL_CARDS, DRILL_STT (shell command that records and prints a
+     transcript), plus the DRILL_LLM* / ANTHROPIC_API_KEY variables of llm.py.
 """
 import argparse
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -15,9 +18,10 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import llm
+
 HOME = Path(os.environ.get("DRILL_HOME", "~/.drill")).expanduser()
 CARDS = Path(os.environ.get("DRILL_CARDS", Path(__file__).parent / "cards"))
-MODEL = os.environ.get("DRILL_MODEL", "claude-sonnet-5-5")
 STT = os.environ.get("DRILL_STT")
 WEIGHTS = {"correct": 0.5, "depth": 0.3, "clarity": 0.2}
 
@@ -141,17 +145,67 @@ def system_for(card_id: str) -> str:
     return "\n".join([SYSTEM, *(h for p, h in HINTS.items() if card_id.startswith(p))])
 
 
-def judge(card: sqlite3.Row, answer: str) -> dict:
-    import anthropic  # lazy: offline commands and tests need no SDK
+def _int5(v) -> int:
+    try:
+        return max(0, min(5, round(float(v))))
+    except (TypeError, ValueError):
+        return 0
 
+
+def clean_grade(g: dict) -> dict:
+    """Clamp and truncate a model's grade (it is untrusted text)."""
+    errors = [e for e in (g.get("errors") or []) if isinstance(e, dict)][:10]
+    return {"correct": _int5(g.get("correct")), "depth": _int5(g.get("depth")),
+            "clarity": _int5(g.get("clarity")),
+            "missed": [str(m)[:500] for m in (g.get("missed") or [])][:10],
+            "errors": [{"quote": str(e.get("quote", ""))[:500], "why": str(e.get("why", ""))[:500]}
+                       for e in errors],
+            "followup": str(g.get("followup") or "")[:500]}
+
+
+def judge(card: sqlite3.Row, answer: str) -> dict:
+    """Grade with the configured language model (see llm.py)."""
     prompt = (f"Question: {card['question']}\n\nReference points:\n{card['ref']}\n\n"
               f"Candidate answer:\n{answer or '(no answer)'}")
-    msg = anthropic.Anthropic().messages.create(
-        model=MODEL, max_tokens=1000, system=system_for(card["id"]), tools=[GRADE_TOOL],
-        tool_choice={"type": "tool", "name": "grade"},
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return next(b.input for b in msg.content if b.type == "tool_use")
+    return clean_grade(llm.call_tool(system_for(card["id"]), GRADE_TOOL, prompt, max_tokens=1000))
+
+
+def checklist(card_id: str, ref: str) -> list[str]:
+    """Points to tick when grading yourself (mirrors web/src/checklist.ts)."""
+    if card_id.startswith("bug:"):
+        return ["Named the bug class", "Explained the root cause", "Gave a fix that works"]
+    if card_id.startswith("problem:"):
+        return ["Right algorithm or approach", "Stated time and space complexity",
+                "Covered the edge cases", "Avoided the known wrong approaches"]
+    bullets = [ln[2:].strip() for ln in ref.splitlines() if ln.startswith("- ") and ln[2:].strip()]
+    return bullets or [ref.strip()]
+
+
+def self_grade(card) -> dict:
+    """No model needed: show the reference, you tick the points your answer covered."""
+    points = checklist(card["id"], card["ref"])
+    print(f"\nReference:\n{card['ref']}\n\nChecklist:")
+    for i, p in enumerate(points, 1):
+        print(f"  {i}. {p}")
+    raw = input("Which did your answer cover? numbers (1 3), 'all' or 'none' > ").strip().lower()
+    if raw == "all":
+        hit = set(range(1, len(points) + 1))
+    else:
+        numbers = [int(t) for t in re.split(r"[,\s]+", raw) if t.isdigit()]
+        hit = {n for n in numbers if 1 <= n <= len(points)}
+    score = round(5 * len(hit) / len(points))
+    return {"correct": score, "depth": score, "clarity": score, "errors": [], "followup": "",
+            "missed": [p for i, p in enumerate(points, 1) if i not in hit]}
+
+
+def grade(card, answer: str) -> dict:
+    """Model grade when a model answers by itself (or DRILL_LLM=manual); otherwise yourself."""
+    try:
+        if llm.automatic() or llm.explicit() == "manual":
+            return judge(card, answer)
+    except llm.LLMError as exc:
+        print(f"grader unavailable ({exc}); grade yourself instead")
+    return self_grade(card)
 
 
 def score(g: dict) -> float:
@@ -165,7 +219,8 @@ def show(g: dict, q: float, interval: float) -> None:
         print(f"  missed: {m}")
     for e in g["errors"]:
         print(f"  error: \"{e['quote']}\" - {e['why']}")
-    print(f"  follow-up: {g['followup']}")
+    if g["followup"]:
+        print(f"  follow-up: {g['followup']}")
 
 
 def cmd_daily(args: argparse.Namespace) -> None:
@@ -181,7 +236,7 @@ def cmd_daily(args: argparse.Namespace) -> None:
         t0 = time.monotonic()
         answer = read_answer()
         secs = time.monotonic() - t0
-        g = judge(card, answer)
+        g = grade(card, answer)
         q = score(g)
         ease, interval, reps = schedule(card["ease"], card["interval"], card["reps"], q)
         db.execute("UPDATE cards SET ease=?, interval=?, reps=?, due=? WHERE id=?",

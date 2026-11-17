@@ -9,7 +9,8 @@
 Verification: the buggy program triggers the expected report (sanitizer, Go race detector or
 Go runtime) on every run, the fixed program runs clean, and the fix is a small diff.
 C++ needs g++ or clang++ with ASan/UBSan/TSan (CXX=...). Go needs `go` (GO=...) and, for
-go-data-race, cgo (a C compiler). Env: ANTHROPIC_API_KEY, DRILL_GEN_MODEL, DRILL_BUGS.
+go-data-race, cgo (a C compiler). The model comes from llm.py (Anthropic, any OpenAI-compatible
+endpoint, or claude.ai by copy and paste). Env: DRILL_BUGS, CXX, GO, DRILL_LLM*.
 """
 import argparse
 import difflib
@@ -24,6 +25,7 @@ from pathlib import Path
 
 import drill
 import gen
+import llm
 import problems
 import sandbox
 
@@ -236,7 +238,7 @@ def propose(category, difficulty, avoid, prev=None, feedback=None) -> dict:
         prompt += (f"\nYour previous attempt failed verification: {feedback}\n"
                    f"Previous attempt:\n{json.dumps(prev)}\nReturn a corrected, full exercise.")
     system = PROPOSE_SYSTEM[CATEGORIES[category].lang]
-    return gen.call_tool(system, PROPOSE_TOOL, prompt, max_tokens=3000)
+    return llm.call_tool(system, PROPOSE_TOOL, prompt, max_tokens=3000)
 
 
 def unique_slug(title: str) -> str:
@@ -267,7 +269,7 @@ def make_bug(category, difficulty, avoid, propose_fn=propose, repairs=2, **vkw):
                     "lang": CATEGORIES[category].lang,
                     "difficulty": max(1, min(5, int(spec.get("difficulty") or difficulty))),
                     "explanation": spec["explanation"],
-                    "provenance": {"model": gen.MODEL, "verified": report}}
+                    "provenance": {"model": llm.describe(), "verified": report}}
             (work / "bug.json").write_text(json.dumps(meta, indent=2))
             return work, ""
         shutil.rmtree(work, ignore_errors=True)
@@ -349,7 +351,7 @@ def practice(db, category: str | None = None, rng=random) -> bool:
     card = card_for(meta, BUGS / bid)
     print(f"\n{card['question']}\n")
     print("Name the bug class, the root cause and the fix (finish with an empty line):")
-    g = drill.judge(card, drill.read_answer())
+    g = drill.grade(card, drill.read_answer())
     q = drill.score(g)
     days = problems.record(db, f"bug:{bid}", q, round(q), 5, json.dumps(g))
     drill.show(g, q, days)

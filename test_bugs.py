@@ -239,7 +239,7 @@ class PipelineTest(unittest.TestCase):
 
         out = io.StringIO()
         with mock.patch.object(drill, "read_answer", return_value="push_back reallocates"), \
-                mock.patch.object(drill, "judge", judge), contextlib.redirect_stdout(out):
+                mock.patch.object(drill, "grade", judge), contextlib.redirect_stdout(out):
             self.assertTrue(bugs.practice(problems.connect()))
         self.assertIn("heap-use-after-free", seen["card"]["ref"])
         self.assertIn("-    int* first", seen["card"]["ref"])

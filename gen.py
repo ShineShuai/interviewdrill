@@ -8,7 +8,9 @@
 
 Pipeline: chunk -> propose (question + points, each with a verbatim quote) -> quote check
 -> independent entailment check -> dedupe -> pending -> human review -> cards/.
-Env: ANTHROPIC_API_KEY, DRILL_GEN_MODEL, DRILL_SOURCES, EDITOR (plus drill.py's variables).
+The model comes from llm.py: with no API key the manual mode shows each prompt for you to
+paste into claude.ai, and skips the second (entailment) model check; quotes are still checked.
+Env: DRILL_SOURCES, EDITOR, plus the DRILL_LLM* / ANTHROPIC_API_KEY variables of llm.py.
 """
 import argparse
 import json
@@ -25,9 +27,9 @@ from html.parser import HTMLParser
 from pathlib import Path
 
 import drill
+import llm
 
 SOURCES = Path(os.environ.get("DRILL_SOURCES", Path(__file__).parent / "sources"))
-MODEL = os.environ.get("DRILL_GEN_MODEL", drill.MODEL)
 CHUNK = 1800  # characters per source chunk
 MIN_QUOTE = 12  # shortest accepted supporting quote
 MIN_POINTS = 2  # fewest verified key points per card
@@ -221,20 +223,9 @@ def add_source(topic: str, src: str) -> tuple[Path, int]:
 
 
 # --- LLM steps (injectable for tests) ---
-def call_tool(system: str, tool: dict, prompt: str, max_tokens: int = 2000) -> dict:
-    import anthropic  # lazy: offline commands and tests need no SDK
-
-    msg = anthropic.Anthropic().messages.create(
-        model=MODEL, max_tokens=max_tokens, system=system, tools=[tool],
-        tool_choice={"type": "tool", "name": tool["name"]},
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return next(b.input for b in msg.content if b.type == "tool_use")
-
-
 def propose(chunk: str, k: int) -> list[dict]:
     prompt = f"Write up to {k} flashcard(s).\n\nExcerpt:\n{chunk}"
-    out = call_tool(PROPOSE_SYSTEM, PROPOSE_TOOL, prompt)
+    out = llm.call_tool(PROPOSE_SYSTEM, PROPOSE_TOOL, prompt)
     return out.get("cards", [])
 
 
@@ -242,7 +233,7 @@ def verify(chunk: str, claims: list[str]) -> list[bool]:
     """Independent check: does the excerpt alone support each claim? Missing verdict = no."""
     listing = "\n".join(f"{i}. {c}" for i, c in enumerate(claims))
     prompt = f"Excerpt:\n{chunk}\n\nClaims (0-based):\n{listing}"
-    out = call_tool(VERIFY_SYSTEM, VERIFY_TOOL, prompt)
+    out = llm.call_tool(VERIFY_SYSTEM, VERIFY_TOOL, prompt)
     ok = {v.get("index"): bool(v.get("supported")) for v in out.get("verdicts", [])}
     return [ok.get(i, False) for i in range(len(claims))]
 
@@ -255,8 +246,10 @@ def connect() -> sqlite3.Connection:
 
 
 def generate(
-    db, topic, n, per_chunk=1, propose_fn=propose, verify_fn=verify, rng=random
+    db, topic, n, per_chunk=1, propose_fn=None, verify_fn=verify, rng=random
 ) -> Counter:
+    """Propose cards for n chunks; verify_fn=None skips the entailment call (quotes stay)."""
+    propose_fn = propose_fn or propose
     chunks = load_chunks(topic)
     if not chunks:
         raise SystemExit(f"no sources in {SOURCES / topic}; run: gen.py add {topic} URL_OR_FILE")
@@ -283,8 +276,11 @@ def generate(
             if not q or len(grounded) < MIN_POINTS:
                 stats["rejected_ungrounded"] += 1
                 continue
-            verdicts = verify_fn(text, [p["text"] for p in grounded])
-            kept = [{**p, "chunk": cid} for p, ok in zip(grounded, verdicts) if ok]
+            checks = "quote" if verify_fn is None else "quote+entailment"
+            verdicts = ([True] * len(grounded) if verify_fn is None
+                        else verify_fn(text, [p["text"] for p in grounded]))
+            kept = [{**p, "chunk": cid, "checks": checks}
+                    for p, ok in zip(grounded, verdicts) if ok]
             stats["points_unsupported"] += len(grounded) - len(kept)
             if len(kept) < MIN_POINTS:
                 stats["rejected_unsupported"] += 1
@@ -346,7 +342,7 @@ def review(db, topic=None, cards_dir=None, edit_fn=edit_in_editor) -> Counter:
             elif key == "a" and q and pts:
                 cid = make_id(r["topic"], q, taken)
                 taken.add(cid)
-                how = "human-edited" if edited else "quote+entailment"
+                how = "human-edited" if edited else pts[0].get("checks", "quote+entailment")
                 meta = f"src: {r['chunk_id']}; difficulty: {r['difficulty']}; verified: {how}"
                 append_card(cards_dir / f"{r['topic']}.md", cid, q, [p["text"] for p in pts], meta)
                 db.execute("UPDATE candidates SET status = 'approved' WHERE id = ?", (r["id"],))
@@ -373,7 +369,10 @@ def cmd_add(a):
 
 
 def cmd_run(a):
-    stats = generate(connect(), a.topic, a.n, a.per_chunk)
+    skip = a.no_verify or llm.provider_name() == "manual"
+    if skip:
+        print("skipping the model's entailment check (quotes are still verified)")
+    stats = generate(connect(), a.topic, a.n, a.per_chunk, verify_fn=None if skip else verify)
     print(", ".join(f"{k}={v}" for k, v in sorted(stats.items())))
     print("next: gen.py review")
 
@@ -405,6 +404,7 @@ def main() -> None:
     s.add_argument("topic")
     s.add_argument("-n", type=int, default=5, help="chunks to process")
     s.add_argument("--per-chunk", type=int, default=1)
+    s.add_argument("--no-verify", action="store_true", help="skip the entailment model call")
     s.set_defaults(fn=cmd_run)
     s = sub.add_parser("review", help="approve candidates into cards/")
     s.add_argument("-t", "--topic")

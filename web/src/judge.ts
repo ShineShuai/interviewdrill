@@ -1,5 +1,5 @@
 import type { Env } from "./env.ts";
-import { HttpError } from "./http.ts";
+import { callJson } from "./llm.ts";
 
 export interface Grade {
   correct: number;
@@ -96,36 +96,7 @@ export async function judge(
   const prompt =
     `Question: ${card.question}\n\nReference points:\n${card.ref}\n\n` +
     `<answer>\n${answer.replaceAll("</answer>", "")}\n</answer>`;
-  let res: Response;
-  try {
-    res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": env.ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: env.MODEL ?? "claude-sonnet-5-5",
-        max_tokens: 1000,
-        system: systemFor(card.id),
-        tools: [TOOL],
-        tool_choice: { type: "tool", name: "grade" },
-        messages: [{ role: "user", content: prompt }],
-      }),
-      signal: AbortSignal.timeout(45_000),
-    });
-  } catch {
-    throw new HttpError(502, "grader unreachable");
-  }
-  if (!res.ok) {
-    console.error("anthropic", res.status, await res.text());
-    throw new HttpError(502, "grader error");
-  }
-  const data = (await res.json()) as {
-    content: { type: string; input?: Record<string, unknown> }[];
-  };
-  const block = data.content.find((b) => b.type === "tool_use");
-  if (!block?.input) throw new HttpError(502, "grader returned no grade");
-  return parseGrade(block.input);
+  const system = systemFor(card.id);
+  const raw = await callJson(env, { system, tool: TOOL, prompt, maxTokens: 1000 });
+  return parseGrade(raw);
 }

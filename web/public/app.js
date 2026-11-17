@@ -15,9 +15,21 @@ function h(tag, attrs = {}, ...kids) {
 async function api(path, opts = {}) {
   const res = await fetch(path, { ...opts, headers: { "X-Drill": "1", ...opts.headers } });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error ?? res.statusText);
+  if (!res.ok) {
+    const err = new Error(data.error ?? res.statusText);
+    err.status = res.status;
+    throw err;
+  }
   return data;
 }
+
+const jsonPost = (body) => ({
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(body),
+});
+
+let grader = "none"; // who grades answers: "workers-ai", "anthropic", or "none" (you do)
 
 const errText = (e) =>
   e instanceof TypeError ? "Offline or session expired. Reload." : e.message;
@@ -108,6 +120,7 @@ async function toggleMic(btn, box, msg) {
 // --- pages ---
 async function home() {
   const s = await api("/api/status");
+  grader = s.grader;
   const topic = h(
     "select",
     {},
@@ -118,6 +131,7 @@ async function home() {
   view.replaceChildren(
     h("h1", {}, `${s.due} due`),
     h("p", { class: "dim" }, `${s.today.n} answered today · streak ${s.streak} d`),
+    h("p", { class: "dim" }, grader === "none" ? "You grade yourself" : `Graded by ${grader}`),
     h("label", {}, "Topic", topic),
     h("label", {}, "Questions", count),
     h(
@@ -161,6 +175,18 @@ function ask(card, label) {
     const msg = h("p", { class: "err" });
     const mic = h("button", { onclick: () => toggleMic(mic, box, msg) }, "Record");
     const send = h("button", { class: "primary" }, "Submit");
+    const secs = () => (performance.now() - t0) / 1000;
+    const mine = h("button", {}, "Grade myself");
+    mine.addEventListener("click", async () => {
+      mine.disabled = true;
+      msg.textContent = "";
+      try {
+        resolve(await selfCheck(card, box.value, secs()));
+      } catch (e) {
+        msg.textContent = errText(e);
+        mine.disabled = false;
+      }
+    });
     const problem = card.id.startsWith("problem:");
     const panel = h("div", { class: "panel" });
     const reveal = h("input", { type: "checkbox" });
@@ -168,23 +194,16 @@ function ask(card, label) {
     run.addEventListener("click", () => runProblem(card, box, panel, run, reveal.checked));
     const skip = h("button", { onclick: () => resolve(null) }, "Next");
     const submit = async () => {
+      if (grader === "none") return mine.click();
       if (!box.value.trim()) return;
       send.disabled = true;
       msg.textContent = "";
       try {
-        resolve(
-          await api("/api/attempt", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              card_id: card.id,
-              answer: box.value,
-              secs: (performance.now() - t0) / 1000,
-            }),
-          }),
-        );
+        resolve(await api("/api/attempt", jsonPost({
+          card_id: card.id, answer: box.value, secs: secs(),
+        })));
       } catch (e) {
-        msg.textContent = errText(e);
+        msg.textContent = `${errText(e)} You can still use "Grade myself".`;
         send.disabled = false;
       }
     };
@@ -206,12 +225,40 @@ function ask(card, label) {
       problem
         ? h("div", { class: "row" }, run, h("label", { class: "inline" }, reveal, "reveal"))
         : null,
-      send,
+      h("div", { class: "row" }, grader === "none" ? null : send, mine),
       problem ? skip : null,
       problem ? panel : null,
       msg,
     );
     box.focus();
+  });
+}
+
+// No model needed: compare your answer with the reference and tick what it covered.
+async function selfCheck(card, answer, secs) {
+  const { ref, points } = await api("/api/reveal", jsonPost({ card_id: card.id }));
+  return new Promise((resolve) => {
+    const ticks = points.map(() => h("input", { type: "checkbox" }));
+    const msg = h("p", { class: "err" });
+    const save = h("button", { class: "primary" }, "Save");
+    save.addEventListener("click", async () => {
+      save.disabled = true;
+      try {
+        const hit = ticks.flatMap((t, i) => (t.checked ? [i] : []));
+        resolve(await api("/api/self-grade", jsonPost({ card_id: card.id, answer, secs, hit })));
+      } catch (e) {
+        msg.textContent = errText(e);
+        save.disabled = false;
+      }
+    });
+    view.replaceChildren(
+      h("h2", {}, "Check yourself"),
+      h("pre", {}, ref),
+      h("p", { class: "dim" }, "Tick what your answer covered:"),
+      ...points.map((p, i) => h("label", { class: "inline" }, ticks[i], p)),
+      save,
+      msg,
+    );
   });
 }
 
@@ -280,7 +327,7 @@ function review({ grade: g, score, interval, ref }, last) {
       bar("clarity", g.clarity),
       list("Missed", g.missed),
       list("Errors", g.errors.map((e) => `"${e.quote}" — ${e.why}`)),
-      h("p", {}, h("b", {}, "Follow-up: "), g.followup),
+      g.followup ? h("p", {}, h("b", {}, "Follow-up: "), g.followup) : null,
       h("details", {}, h("summary", {}, "Reference"), h("pre", {}, ref)),
       h("p", { class: "dim" }, `next review in ${Math.round(interval)} d`),
       h("button", { class: "primary", onclick: () => resolve() }, last ? "Finish" : "Next"),

@@ -1,9 +1,7 @@
 import contextlib
 import io
 import json
-import sys
 import tempfile
-import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -83,23 +81,6 @@ class TextTest(unittest.TestCase):
                 "</ul></body></html>")
         self.assertEqual(gen.html_to_text(html), "Title\n\nOne & two\n\na\nb")
 
-    def test_call_tool_request_shape(self):
-        seen = {}
-
-        def create(**kw):
-            seen.update(kw)
-            block = types.SimpleNamespace(type="tool_use", input={"ok": 1})
-            return types.SimpleNamespace(content=[block])
-
-        fake = types.SimpleNamespace(
-            Anthropic=lambda: types.SimpleNamespace(messages=types.SimpleNamespace(create=create))
-        )
-        with mock.patch.dict(sys.modules, {"anthropic": fake}):
-            out = gen.call_tool("sys", gen.VERIFY_TOOL, "prompt")
-        self.assertEqual(out, {"ok": 1})
-        self.assertEqual(seen["tool_choice"], {"type": "tool", "name": "verdicts"})
-        self.assertEqual(seen["messages"], [{"role": "user", "content": "prompt"}])
-
 
 class PipelineTest(Base):
     INVENTED = {
@@ -132,6 +113,34 @@ class PipelineTest(Base):
         stats = self.run_gen([GOOD], lambda text, claims: [True, False])
         self.assertEqual((stats["rejected_unsupported"], stats["pending"]), (1, 0))
 
+    def test_without_a_verifier_points_are_marked_quote_only(self):
+        stats = gen.generate(self.db, "go", 5, 5, lambda text, k: [GOOD], None)
+        self.assertEqual(stats["pending"], 1)
+        points = json.loads(self.db.execute("SELECT points FROM candidates").fetchone()[0])
+        self.assertEqual({p["checks"] for p in points}, {"quote"})
+
+    def test_manual_mode_skips_the_entailment_call(self):
+        calls = []
+        args = mock.Mock(topic="go", n=1, per_chunk=1, no_verify=False)
+        out = io.StringIO()
+        with mock.patch.object(gen.llm, "provider_name", return_value="manual"), \
+                mock.patch.object(gen, "propose", lambda text, k: [GOOD]), \
+                mock.patch.object(gen, "verify", lambda *a: calls.append(a)), \
+                contextlib.redirect_stdout(out):
+            gen.cmd_run(args)
+        self.assertEqual(calls, [])
+        self.assertIn("skipping the model's entailment check", out.getvalue())
+        self.assertIn("pending=1", out.getvalue())
+
+    def test_no_verify_flag_also_skips_it(self):
+        args = mock.Mock(topic="go", n=1, per_chunk=1, no_verify=True)
+        with mock.patch.object(gen.llm, "provider_name", return_value="openai"), \
+                mock.patch.object(gen, "propose", lambda text, k: [GOOD]), \
+                mock.patch.object(gen, "verify", side_effect=AssertionError("must not run")), \
+                contextlib.redirect_stdout(io.StringIO()):
+            gen.cmd_run(args)
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM candidates").fetchone()[0], 1)
+
     def test_chunk_rotation_prefers_untried(self):
         self.run_gen([])
         tries = dict(self.db.execute("SELECT chunk_id, tries FROM chunk_tries").fetchall())
@@ -158,6 +167,13 @@ class ReviewTest(Base):
                                      "- Buffered sends block only when full")
         status = self.db.execute("SELECT status FROM candidates").fetchone()[0]
         self.assertEqual(status, "approved")
+
+    def test_quote_only_candidates_are_labelled_as_such(self):
+        gen.generate(self.db, "go", 5, 5, lambda text, k: [GOOD], None)
+        quiet = contextlib.redirect_stdout(io.StringIO())
+        with mock.patch("builtins.input", side_effect=["a"]), quiet:
+            gen.review(self.db)
+        self.assertIn("verified: quote -->", (self.cards / "go.md").read_text())
 
     def test_edit_then_approve_is_marked_human_edited(self):
         self.approve_all(["e", "a"], edit=lambda q, p: ("Edited Q?", ["only one", "two"]))

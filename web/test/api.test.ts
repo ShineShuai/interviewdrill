@@ -26,6 +26,7 @@ beforeEach(() => {
     DB: db as unknown as Env["DB"],
     AI: { run: async () => ({ text: " hello " }) } as unknown as Env["AI"],
     ANTHROPIC_API_KEY: "key",
+    LLM: "anthropic", // these tests stub Anthropic; Workers AI is tested in grader.test.ts
     DEV_USER: "me",
     DAILY_CAP: "50",
   };

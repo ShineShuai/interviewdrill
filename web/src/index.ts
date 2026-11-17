@@ -1,7 +1,9 @@
 import { authenticate } from "./auth.ts";
 import type { Env } from "./env.ts";
 import { HttpError, json } from "./http.ts";
-import { judge, score } from "./judge.ts";
+import { checklist } from "./checklist.ts";
+import { judge, score, type Grade } from "./judge.ts";
+import { providerOf } from "./llm.ts";
 import { iso, replay, schedule, streak, type CardState } from "./srs.ts";
 
 interface Ctx {
@@ -120,6 +122,7 @@ const status: Handler = async ({ env, user }) => {
     due: topics.results.reduce((sum, t) => sum + t.due, 0),
     today: { n: done?.n ?? 0 },
     streak: streak(days.results.map((r) => r.d), today),
+    grader: providerOf(env), // "none": the app asks you to grade yourself
   });
 };
 
@@ -148,6 +151,7 @@ const attempt: Handler = async ({ req, env, user }) => {
     .bind(cardId)
     .first<{ id: string; question: string; ref: string }>();
   if (!card) throw new HttpError(404, "unknown card");
+  if (providerOf(env) === "none") throw new HttpError(409, "no grader configured: grade yourself");
 
   await takeQuota(env, user);
   const grade = await judge(env, card, answer);
@@ -155,6 +159,53 @@ const attempt: Handler = async ({ req, env, user }) => {
   const nx = await recordAttempt(env, user, cardId, q, {
     secs, answer, correct: grade.correct, depth: grade.depth, clarity: grade.clarity,
     detail: grade,
+  });
+  return json({ grade, score: q, interval: nx.interval, ref: card.ref });
+};
+
+interface CardRow {
+  id: string;
+  question: string;
+  ref: string;
+}
+
+async function loadCard(env: Env, id: string): Promise<CardRow> {
+  const card = await env.DB.prepare("SELECT id, question, ref FROM cards WHERE id = ?1")
+    .bind(id)
+    .first<CardRow>();
+  if (!card) throw new HttpError(404, "unknown card");
+  return card;
+}
+
+/** Show the reference and the checklist (no model, no quota) so the user can grade themselves. */
+const reveal: Handler = async ({ req, env }) => {
+  const card = await loadCard(env, String((await readJson(req)).card_id ?? ""));
+  return json({ ref: card.ref, points: checklist(card.id, card.ref) });
+};
+
+/** The user ticks which checklist points their answer covered; the score is the share. */
+const selfGrade: Handler = async ({ req, env, user }) => {
+  const body = await readJson(req);
+  const card = await loadCard(env, String(body.card_id ?? ""));
+  const points = checklist(card.id, card.ref);
+  const hit = body.hit;
+  const valid = (i: unknown): boolean =>
+    typeof i === "number" && Number.isInteger(i) && i >= 0 && i < points.length;
+  if (!Array.isArray(hit) || !hit.every(valid)) {
+    throw new HttpError(400, "hit must be a list of checklist numbers");
+  }
+  const ticked = new Set<number>(hit as number[]);
+  const q = Math.round((500 * ticked.size) / points.length) / 100;
+  const level = Math.round(q);
+  const grade: Grade = {
+    correct: level, depth: level, clarity: level, errors: [], followup: "",
+    missed: points.filter((_, i) => !ticked.has(i)),
+  };
+  const nx = await recordAttempt(env, user, card.id, q, {
+    secs: Math.min(3600, Math.max(0, Number(body.secs) || 0)),
+    answer: String(body.answer ?? "").slice(0, MAX_ANSWER),
+    correct: level, depth: level, clarity: level,
+    detail: { mode: "self", points: points.length, hit: [...ticked].sort() },
   });
   return json({ grade, score: q, interval: nx.interval, ref: card.ref });
 };
@@ -372,6 +423,8 @@ const ROUTES: Record<string, Handler> = {
   "GET /api/status": status,
   "GET /api/next": next,
   "POST /api/attempt": attempt,
+  "POST /api/reveal": reveal,
+  "POST /api/self-grade": selfGrade,
   "POST /api/problem/result": problemResult,
   "POST /api/sync/push": syncPush,
   "GET /api/sync/pull": syncPull,

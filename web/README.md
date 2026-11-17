@@ -8,7 +8,6 @@ plus approved problems and bug exercises (`../export_cards.py`).
 npm i
 npx wrangler d1 create drill          # paste database_id into wrangler.toml
 npm run db:init && npm run cards
-npx wrangler secret put ANTHROPIC_API_KEY
 ```
 Create a Cloudflare Access (self-hosted) application covering the Worker hostname
 (workers.dev too), allow your email, then set `TEAM_DOMAIN` and `ACCESS_AUD` in
@@ -67,3 +66,26 @@ each side rebuilds a card's schedule by replaying them in time order, so devices
    then `./sync.py` (or `./sync.py --status`). `wrangler dev` needs no token.
 Only `problem:` and `bug:` cards sync. A problem that is not published (`npm run cards`) stays
 pending in the CLI and is retried on the next sync.
+
+## Grading without an API key
+Answers are graded by `LLM` in `wrangler.toml`:
+- `workers-ai` (default): Cloudflare's own models through the `AI` binding. No key; the free
+  plan has a daily allowance (10,000 "neurons", shared with speech-to-text). `LLM_MODEL` lists
+  models to try in order; if the first is refused (some need the paid plan) or the allowance is
+  used up, the next one answers, and if all fail the app offers "Grade myself".
+- `anthropic`: `npx wrangler secret put ANTHROPIC_API_KEY`, set `LLM = "anthropic"`.
+- `none`: no model. "Grade myself" shows the reference and a checklist; you tick what your
+  answer covered and the share is the score (it is stored and scheduled like any other grade).
+"Grade myself" is always there, whichever grader is on. Small models grade less reliably than
+large ones; treat their scores as a hint.
+
+## CLI without an API key (`llm.py`)
+`DRILL_LLM` picks the provider; default: `anthropic` if `ANTHROPIC_API_KEY` is set, `openai` if
+`DRILL_LLM_URL` is set, else `manual`.
+- `openai`: any OpenAI-compatible endpoint: `DRILL_LLM_URL` (Ollama: `http://localhost:11434/v1`),
+  `DRILL_LLM_MODEL`, `DRILL_LLM_KEY` if needed (Groq, OpenRouter, Google AI Studio, ...).
+- `manual`: the tool prints the prompt (copied with `pbcopy` on macOS); paste it into claude.ai,
+  paste the JSON reply back and end with a line saying `END`. Used for generating problems,
+  bugs and cards. `gen.py run` skips its second model check there; quotes are still verified.
+- Grading in the CLI (`drill.py daily`, `bugs.py next`) uses a model only if one is configured
+  (or `DRILL_LLM=manual`); otherwise you tick a checklist yourself, as in the web app.
