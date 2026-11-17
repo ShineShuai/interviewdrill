@@ -10,6 +10,7 @@ import re
 import socket
 import subprocess
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 try:
@@ -24,6 +25,12 @@ COUNTS = {f.stem: len(re.findall(r"^## ", f.read_text(), re.M))
           for f in sorted((Path(__file__).parent / "cards").glob("*.md"))}
 COUNTS["problems"] = 1  # the stand-in problem that ui-server.ts adds
 TOTAL = sum(COUNTS.values())
+
+
+def now_z():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 SOLUTION = "a, b = map(int, input().split())\nprint(a + b)"
 
 
@@ -97,6 +104,7 @@ class GradedTest(UiCase):
     def test_home_lists_due_cards_and_the_grader(self):
         p = self.page
         expect(p.locator("h1")).to_have_text(f"{TOTAL} due")
+        expect(p.locator("body")).not_to_contain_text("null")
         expect(p.locator("body")).to_contain_text("Graded by workers-ai")
         self.assertIn(f"go ({COUNTS['go']})", p.locator("select").inner_text())
         self.no_overflow()
@@ -206,13 +214,127 @@ class GradedTest(UiCase):
                           "fetchOtherOrigin": "blocked"})
         self.problems.clear()
 
-    def test_installable_and_works_offline(self):
+    def test_due_cards_are_cached_with_their_references(self):
+        self.wait_for_cache()
+        cards = self.page.evaluate("JSON.parse(localStorage.getItem('drill.cards'))")
+        self.assertTrue(0 < len(cards) <= 30)
+        for c in cards:
+            self.assertTrue(c["ref"] and c["points"] and c["question"])
+            self.assertFalse(c["id"].startswith("problem:"))
+
+    def test_offline_drill_queues_attempts_and_syncs_them_when_back_online(self):
+        p = self.page
+        self.go_offline()
+        cached = len(self.queue("drill.cards"))
+        expect(p.locator("h1")).to_have_text(f"Offline · {cached} cards")
+        expect(p.locator("body")).not_to_contain_text("null")
+        self.start("", 2)  # the cache holds a sample of every topic, so do not filter
+        before = p.evaluate("new Date().toISOString()")
+        for i in range(2):
+            p.fill("textarea", f"offline answer {i}")
+            p.click("text=Grade myself")
+            expect(p.locator("h2")).to_have_text("Check yourself")
+            p.locator("input[type=checkbox]").first.check()
+            self.no_overflow()
+            p.click("text=Save")
+            expect(p.locator("body")).to_contain_text("saved on this device")
+            if i == 0:
+                p.get_by_role("button", name="Next", exact=True).click()
+        p.click("text=Finish")
+        expect(p.locator("h1")).to_have_text(f"Offline · {cached - 2} cards")
+        expect(p.locator("body")).to_contain_text("2 answers wait to sync")
+        queued = self.queue()
+        self.assertEqual([q["answer"] for q in queued], ["offline answer 0", "offline answer 1"])
+        self.assertEqual(len({q["uid"] for q in queued}), 2)
+        self.problems.clear()
+        self.ctx.set_offline(False)  # the browser fires "online": the queue is sent by itself
+        self.wait_until("JSON.parse(localStorage.getItem('drill.queue') || '[]').length === 0")
+        out = self.exported()
+        self.assertEqual(sorted(a["answer"] for a in out["attempts"]),
+                         ["offline answer 0", "offline answer 1"])
+        for a in out["attempts"]:  # kept the time of the answer, not the time of the sync
+            self.assertGreaterEqual(a["ts"], before[:19] + "Z")
+            self.assertEqual(a["score"], a["correct"] and a["score"])
+        self.assertEqual(len(out["card_state"]), 2)
+        p.reload()
+        expect(p.locator("body")).to_contain_text("2 answered today")
+        expect(p.locator("body")).not_to_contain_text("wait to sync")
+
+    def test_a_save_that_fails_online_is_queued_not_lost(self):
+        p = self.page
+        p.route("**/api/self-grade", lambda r: r.abort())
+        self.start("go")
+        p.fill("textarea", "will be queued")
+        p.click("text=Grade myself")
+        p.locator("input[type=checkbox]").first.check()
+        p.click("text=Save")
+        expect(p.locator("body")).to_contain_text("saved on this device")
+        self.assertEqual([q["answer"] for q in self.queue()], ["will be queued"])
+        p.unroute("**/api/self-grade")
+        p.reload()  # home() sends the queue before it asks for the status
+        expect(p.locator("body")).to_contain_text("1 answered today")
+        self.assertEqual(self.queue(), [])
+        self.assertEqual([a["answer"] for a in self.exported()["attempts"]], ["will be queued"])
+        self.problems.clear()  # the aborted request is logged by the browser
+
+    def test_a_refused_queue_item_is_set_aside_and_the_rest_still_syncs(self):
+        p = self.page
+        good = {"uid": "pwa:good", "key": "go-chan", "ts": now_z(), "q": 4,
+                "secs": 3, "answer": "mine", "mode": "offline", "correct": 4, "depth": 4,
+                "clarity": 4}
+        bad = {**good, "uid": "pwa:bad", "key": "has space"}
+        p.evaluate("q => localStorage.setItem('drill.queue', JSON.stringify(q))", [bad, good])
+        p.reload()
+        expect(p.locator("body")).to_contain_text("1 answered today")
+        self.assertEqual(self.queue(), [])
+        self.assertEqual([q["uid"] for q in self.queue("drill.rejected")], ["pwa:bad"])
+        self.assertEqual([a["answer"] for a in self.exported()["attempts"]], ["mine"])
+        self.problems.clear()  # the refused request is logged by the browser
+
+    def test_a_queue_that_cannot_be_sent_stays_for_the_next_time(self):
+        p = self.page
+        item = {"uid": "pwa:later", "key": "go-chan", "ts": now_z(), "q": 4,
+                "secs": 3, "answer": "later", "mode": "offline"}
+        p.evaluate("q => localStorage.setItem('drill.queue', JSON.stringify(q))", [item])
+        p.route("**/api/sync/push", lambda r: r.fulfill(status=503, body="{}"))
+        p.reload()
+        expect(p.locator("body")).to_contain_text("1 answers wait to sync")
+        self.assertEqual(len(self.queue()), 1)
+        self.problems.clear()
+
+    def go_offline(self, forget_cards=False):
         p = self.page
         p.evaluate("navigator.serviceWorker.ready.then(() => true)")
         p.reload()  # now controlled by the worker
-        p.wait_for_function("navigator.serviceWorker.controller !== null")
+        self.wait_until("navigator.serviceWorker.controller !== null")
+        self.wait_for_cache()
+        p.wait_for_load_state("networkidle")  # a refresh of the cache may still be running
+        if forget_cards:
+            p.evaluate("localStorage.clear()")
         self.ctx.set_offline(True)
         p.reload()
+        self.problems.clear()  # the browser logs the requests that fail offline
+
+    def wait_until(self, js, seconds=10):
+        """Poll an expression with evaluate: wait_for_function would eval it under the page's CSP."""
+        for _ in range(int(seconds * 10)):
+            if self.page.evaluate(js):
+                return
+            self.page.wait_for_timeout(100)
+        self.fail(f"timed out waiting for: {js}")
+
+    def wait_for_cache(self):
+        self.wait_until("JSON.parse(localStorage.getItem('drill.cards') || '[]').length > 0")
+
+    def queue(self, key="drill.queue"):
+        return self.page.evaluate(f"JSON.parse(localStorage.getItem('{key}') || '[]')")
+
+    def exported(self):
+        return self.page.request.get(self.base + "/api/export").json()
+
+    def test_installable_and_works_offline(self):
+        p = self.page
+        self.go_offline(forget_cards=True)  # nothing cached: the shell loads, the data does not
         expect(p.locator("nav")).to_be_visible()
         expect(p.locator("p.err")).to_have_text("Offline or session expired. Reload.")
         self.ctx.set_offline(False)

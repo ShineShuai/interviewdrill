@@ -126,6 +126,23 @@ const status: Handler = async ({ env, user }) => {
   });
 };
 
+/**
+ * Due cards with their references, for a device that may lose its connection: the PWA caches
+ * them and lets you grade yourself offline. Problems need the browser runner, so they stay out.
+ */
+const offline: Handler = async ({ env, url, user }) => {
+  const n = clampInt(url.searchParams.get("n"), 1, 50, 30);
+  const rows = await env.DB.prepare(
+    "SELECT c.id, c.topic, c.question, c.ref FROM cards c " +
+      "LEFT JOIN card_state s ON s.card_id = c.id AND s.user_id = ?1 " +
+      "WHERE COALESCE(s.due, '') <= ?2 AND c.id NOT LIKE 'problem:%' " +
+      "ORDER BY COALESCE(s.due, ''), RANDOM() LIMIT ?3",
+  )
+    .bind(user, iso(new Date()), n)
+    .all<CardRow & { topic: string }>();
+  return json({ cards: rows.results.map((c) => ({ ...c, points: checklist(c.id, c.ref) })) });
+};
+
 const next: Handler = async ({ env, url, user }) => {
   const n = clampInt(url.searchParams.get("n"), 1, 20, 5);
   const topic = url.searchParams.get("topic") || null;
@@ -309,6 +326,8 @@ interface SyncAttempt {
   correct: number | null; // per-criterion grades of a graded card (0..5), if the sender has them
   depth: number | null;
   clarity: number | null;
+  answer: string | null; // the typed answer, if the sender keeps it (the PWA's offline queue)
+  mode: "cli" | "offline";
 }
 
 function parseSyncAttempt(raw: unknown, i: number): SyncAttempt {
@@ -336,10 +355,16 @@ function parseSyncAttempt(raw: unknown, i: number): SyncAttempt {
     }
     return v;
   };
+  if (a.answer !== undefined && a.answer !== null && typeof a.answer !== "string") {
+    bad("answer must be a string");
+  }
+  if (a.mode !== undefined && a.mode !== "cli" && a.mode !== "offline") bad("bad mode");
   return {
     uid: a.uid as string, key: a.key as string, ts: a.ts as string, q: a.q as number, passed,
     total, secs: Math.min(3600, Math.max(0, Number(a.secs) || 0)),
     correct: level("correct"), depth: level("depth"), clarity: level("clarity"),
+    answer: typeof a.answer === "string" ? a.answer.slice(0, MAX_ANSWER) : null,
+    mode: a.mode === "offline" ? "offline" : "cli",
   };
 }
 
@@ -380,13 +405,14 @@ const syncPush: Handler = async ({ req, env, user }) => {
       env.DB.prepare(
         "INSERT OR IGNORE INTO attempts(user_id, card_id, ts, secs, answer, correct, depth, " +
           "clarity, score, detail, uid) " +
-          "VALUES(?1, ?2, ?3, ?4, '(cli)', ?5, ?6, ?7, ?8, ?9, ?10)",
+          "VALUES(?1, ?2, ?3, ?4, ?11, ?5, ?6, ?7, ?8, ?9, ?10)",
       ).bind(
         user, a.key, a.ts, a.secs,
         a.correct ??
           (a.passed !== null && a.total ? Math.round((5 * a.passed) / a.total) : Math.round(a.q)),
         a.depth, a.clarity, a.q,
-        JSON.stringify({ mode: "cli", passed: a.passed, total: a.total }), a.uid,
+        JSON.stringify({ mode: a.mode, passed: a.passed, total: a.total }), a.uid,
+        a.answer ?? "(cli)",
       ),
     ),
   );
@@ -438,6 +464,7 @@ const syncPull: Handler = async ({ env, url, user }) => {
 const ROUTES: Record<string, Handler> = {
   "GET /api/status": status,
   "GET /api/next": next,
+  "GET /api/offline": offline,
   "POST /api/attempt": attempt,
   "POST /api/reveal": reveal,
   "POST /api/self-grade": selfGrade,

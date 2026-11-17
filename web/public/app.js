@@ -13,7 +13,13 @@ function h(tag, attrs = {}, ...kids) {
 }
 
 async function api(path, opts = {}) {
-  const res = await fetch(path, { ...opts, headers: { "X-Drill": "1", ...opts.headers } });
+  let res;
+  try {
+    res = await fetch(path, { ...opts, headers: { "X-Drill": "1", ...opts.headers } });
+  } catch {
+    // network down, or the Access session expired (the login redirect fails the request)
+    throw Object.assign(new Error("offline"), { offline: true });
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const err = new Error(data.error ?? res.statusText);
@@ -32,12 +38,83 @@ const jsonPost = (body) => ({
 let grader = "none"; // who grades answers: "workers-ai", "anthropic", or "none" (you do)
 
 const errText = (e) =>
-  e instanceof TypeError ? "Offline or session expired. Reload." : e.message;
+  e.offline || e instanceof TypeError ? "Offline or session expired. Reload." : e.message;
+
+// --- offline: cached cards plus a queue of self-graded attempts, sent when the server answers ---
+const CACHE_KEY = "drill.cards"; // due cards with their references (GET /api/offline)
+const QUEUE_KEY = "drill.queue"; // attempts made offline, pushed through /api/sync/push
+const REJECTED_KEY = "drill.rejected"; // queued attempts the server refused (kept, not retried)
+
+const store = {
+  get(key) {
+    try {
+      return JSON.parse(localStorage.getItem(key)) ?? [];
+    } catch {
+      return [];
+    }
+  },
+  set(key, value) {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+    } catch {
+      /* storage full or blocked: the app still works online */
+    }
+  },
+};
+const queued = () => store.get(QUEUE_KEY);
+const dequeue = (items) => {
+  const gone = new Set(items.map((i) => i.uid));
+  store.set(QUEUE_KEY, queued().filter((i) => !gone.has(i.uid)));
+};
+
+// replaceChildren does not skip null the way h() does, so a missing note is an empty list
+const waitingNote = () =>
+  queued().length ? [h("p", { class: "dim" }, `${queued().length} answers wait to sync`)] : [];
+
+/** Push one batch. The server ignores a uid it already has, so a retry is harmless. */
+async function sendQueued(items) {
+  try {
+    await api("/api/sync/push", jsonPost({ attempts: items }));
+    dequeue(items);
+    return true;
+  } catch (e) {
+    if (e.status !== 400) return false; // offline, signed out or server trouble: retry later
+    if (items.length > 1) {
+      for (const item of items) if (!(await sendQueued([item]))) return false;
+      return true;
+    }
+    store.set(REJECTED_KEY, [...store.get(REJECTED_KEY), ...items]);
+    dequeue(items);
+    return true;
+  }
+}
+
+let flushing = false;
+async function flushQueue() {
+  if (flushing) return;
+  flushing = true;
+  try {
+    for (let items = queued().slice(0, 200); items.length; items = queued().slice(0, 200)) {
+      if (!(await sendQueued(items))) return;
+    }
+  } finally {
+    flushing = false;
+  }
+}
+
+/** Keep the next due cards on the device so a drill still works without a connection. */
+async function refreshCache() {
+  store.set(CACHE_KEY, (await api("/api/offline?n=30")).cards);
+}
+
+const newUid = () =>
+  `pwa:${crypto.randomUUID?.() ?? Date.now().toString(36) + Math.random().toString(36).slice(2)}`;
 
 async function show(page, ...args) {
   try {
     await page(...args);
   } catch (e) {
+    if (page === home && e.offline && store.get(CACHE_KEY).length) return offlineHome();
     view.replaceChildren(
       h("p", { class: "err" }, errText(e)),
       h("button", { onclick: () => location.reload() }, "Reload"),
@@ -119,6 +196,7 @@ async function toggleMic(btn, box, msg) {
 
 // --- pages ---
 async function home() {
+  await flushQueue();
   const s = await api("/api/status");
   grader = s.grader;
   const topic = h(
@@ -132,6 +210,7 @@ async function home() {
     h("h1", {}, `${s.due} due`),
     h("p", { class: "dim" }, `${s.today.n} answered today · streak ${s.streak} d`),
     h("p", { class: "dim" }, grader === "none" ? "You grade yourself" : `Graded by ${grader}`),
+    ...waitingNote(),
     h("label", {}, "Topic", topic),
     h("label", {}, "Questions", count),
     h(
@@ -140,16 +219,50 @@ async function home() {
       "Start",
     ),
   );
+  refreshCache().catch(() => {}); // best effort: only needed for the next time you are offline
+}
+
+// No connection: drill the cached cards, grade yourself, queue the attempts.
+function offlineHome() {
+  grader = "none";
+  const cards = store.get(CACHE_KEY);
+  const topics = [...new Set(cards.map((c) => c.topic))].sort();
+  const topic = h(
+    "select",
+    {},
+    h("option", { value: "" }, `all (${cards.length})`),
+    ...topics.map((t) =>
+      h("option", { value: t }, `${t} (${cards.filter((c) => c.topic === t).length})`),
+    ),
+  );
+  const count = h("input", { type: "number", min: 1, max: 20, value: 5 });
+  const start = () => {
+    const mine = cards.filter((c) => !topic.value || c.topic === topic.value);
+    const picked = mine.slice(0, Number(count.value) || 5).map((c) => ({ ...c, offline: true }));
+    show(drillCards, picked, offlineHome);
+  };
+  view.replaceChildren(
+    h("h1", {}, `Offline · ${cards.length} cards`),
+    h("p", { class: "dim" }, "You grade yourself; answers sync when you are back online"),
+    ...waitingNote(),
+    h("label", {}, "Topic", topic),
+    h("label", {}, "Questions", count),
+    h("button", { class: "primary", onclick: start }, "Start"),
+  );
 }
 
 async function drill(topic, n) {
   const q = new URLSearchParams({ n });
   if (topic) q.set("topic", topic);
   const { cards } = await api(`/api/next?${q}`);
+  await drillCards(cards, home);
+}
+
+async function drillCards(cards, back) {
   if (!cards.length) {
     view.replaceChildren(
       h("p", {}, "Nothing due."),
-      h("button", { onclick: () => show(home) }, "Back"),
+      h("button", { onclick: () => show(back) }, "Back"),
     );
     return;
   }
@@ -157,7 +270,7 @@ async function drill(topic, n) {
     const result = await ask(card, `${i + 1}/${cards.length}`);
     if (result) await review(result, i + 1 === cards.length);
   }
-  await home();
+  await back();
 }
 
 function ask(card, label) {
@@ -236,7 +349,8 @@ function ask(card, label) {
 
 // No model needed: compare your answer with the reference and tick what it covered.
 async function selfCheck(card, answer, secs) {
-  const { ref, points } = await api("/api/reveal", jsonPost({ card_id: card.id }));
+  const { ref, points } =
+    card.ref ? card : await api("/api/reveal", jsonPost({ card_id: card.id }));
   return new Promise((resolve) => {
     const ticks = points.map(() => h("input", { type: "checkbox" }));
     const msg = h("p", { class: "err" });
@@ -245,7 +359,7 @@ async function selfCheck(card, answer, secs) {
       save.disabled = true;
       try {
         const hit = ticks.flatMap((t, i) => (t.checked ? [i] : []));
-        resolve(await api("/api/self-grade", jsonPost({ card_id: card.id, answer, secs, hit })));
+        resolve(await saveSelfGrade(card, answer, secs, hit, points, ref));
       } catch (e) {
         msg.textContent = errText(e);
         save.disabled = false;
@@ -260,6 +374,36 @@ async function selfCheck(card, answer, secs) {
       msg,
     );
   });
+}
+
+// Same arithmetic as the Worker's self-grade, so a queued attempt scores what an online one would.
+function queueSelfGrade(card, answer, secs, hit, points, ref) {
+  const score = Math.round((500 * hit.length) / points.length) / 100;
+  const level = Math.round(score);
+  queuedAttempt({
+    uid: newUid(), key: card.id, ts: new Date().toISOString().slice(0, 19) + "Z", q: score,
+    secs: Math.min(3600, Math.round(secs)), answer: answer.slice(0, 4000), mode: "offline",
+    correct: level, depth: level, clarity: level,
+  });
+  store.set(CACHE_KEY, store.get(CACHE_KEY).filter((c) => c.id !== card.id));
+  const grade = {
+    correct: level, depth: level, clarity: level, errors: [], followup: "",
+    missed: points.filter((_, i) => !hit.includes(i)),
+  };
+  return { grade, score, interval: null, ref };
+}
+
+const queuedAttempt = (item) => store.set(QUEUE_KEY, [...queued(), item]);
+
+async function saveSelfGrade(card, answer, secs, hit, points, ref) {
+  if (!card.offline) {
+    try {
+      return await api("/api/self-grade", jsonPost({ card_id: card.id, answer, secs, hit }));
+    } catch (e) {
+      if (!e.offline) throw e; // the server answered with an error: show it, do not queue
+    }
+  }
+  return queueSelfGrade(card, answer, secs, hit, points, ref);
 }
 
 const detailText = (d) => `input:\n${d.input}\nexpected: ${d.expected}\ngot: ${d.got}`;
@@ -329,7 +473,13 @@ function review({ grade: g, score, interval, ref }, last) {
       list("Errors", g.errors.map((e) => `"${e.quote}" — ${e.why}`)),
       g.followup ? h("p", {}, h("b", {}, "Follow-up: "), g.followup) : null,
       h("details", {}, h("summary", {}, "Reference"), h("pre", {}, ref)),
-      h("p", { class: "dim" }, `next review in ${Math.round(interval)} d`),
+      h(
+        "p",
+        { class: "dim" },
+        interval == null
+          ? "saved on this device; the schedule updates when it syncs"
+          : `next review in ${Math.round(interval)} d`,
+      ),
       h("button", { class: "primary", onclick: () => resolve() }, last ? "Finish" : "Next"),
     );
   });
@@ -376,5 +526,6 @@ for (const btn of document.querySelectorAll("nav button")) {
     show(btn.dataset.tab === "report" ? report : home);
   });
 }
+addEventListener("online", flushQueue);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js");
 show(home);

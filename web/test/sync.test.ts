@@ -222,3 +222,55 @@ test("users do not see each other's attempts", async () => {
   assert.deepEqual(out.attempts, []);
   assert.equal(state("problem:fixture-a", "other"), undefined);
 });
+
+test("offline: due cards come with references and checklists, problems stay out", async () => {
+  const get = async (query = "") =>
+    (await (await call(`/api/offline${query}`)).json()) as {
+      cards: { id: string; topic: string; question: string; ref: string; points: string[] }[];
+    };
+  const all = await get();
+  assert.deepEqual(all.cards.map((c) => c.id).sort(), ["bug:fixture-b", "go-chan"]);
+  const go = all.cards.find((c) => c.id === "go-chan");
+  assert.deepEqual(go, { id: "go-chan", topic: "go", question: "Q", ref: "- r", points: ["r"] });
+  assert.equal((await get("?n=1")).cards.length, 1);
+  assert.equal((await get("?n=0")).cards.length, 1); // clamped to at least 1
+  // an answered card is not due, so it is not cached again
+  await call("/api/self-grade", {
+    method: "POST", body: JSON.stringify({ card_id: "go-chan", answer: "a", hit: [0] }),
+  });
+  assert.deepEqual((await get()).cards.map((c) => c.id), ["bug:fixture-b"]);
+});
+
+test("an offline-queue attempt keeps its answer and mode", async () => {
+  const wire = {
+    uid: "pwa:1", key: "go-chan", ts: "2026-11-01T09:00:00Z", q: 4, secs: 9,
+    answer: "my own words", mode: "offline", correct: 4, depth: 4, clarity: 4,
+  };
+  assert.deepEqual(await (await push([wire])).json(), { accepted: 1, duplicates: 0, skipped: [] });
+  const row = db.raw.prepare("SELECT answer, detail FROM attempts").get() as
+    { answer: string; detail: string };
+  assert.equal(row.answer, "my own words");
+  assert.equal(JSON.parse(row.detail).mode, "offline");
+  assert.deepEqual(await (await push([wire])).json(), { accepted: 0, duplicates: 1, skipped: [] });
+  await push([{ ...wire, uid: "pwa:2", answer: "x".repeat(5000) }]);
+  const long = db.raw.prepare("SELECT length(answer) AS n FROM attempts WHERE uid = 'pwa:2'")
+    .get() as { n: number };
+  assert.equal(long.n, 4000);
+  await push([{ ...wire, uid: "pwa:3", answer: undefined, mode: undefined }]);
+  const plain = db.raw.prepare("SELECT answer, detail FROM attempts WHERE uid = 'pwa:3'").get() as
+    { answer: string; detail: string };
+  assert.equal(plain.answer, "(cli)");
+  assert.equal(JSON.parse(plain.detail).mode, "cli");
+});
+
+test("push rejects a bad answer or mode", async () => {
+  const ok = { uid: "pwa:9", key: "go-chan", ts: "2026-11-01T09:00:00Z", q: 4, secs: 1 };
+  for (const [patch, needle] of [
+    [{ answer: 5 }, /answer must be a string/],
+    [{ mode: "web" }, /bad mode/],
+  ] as const) {
+    const res = await push([{ ...ok, ...patch }]);
+    assert.equal(res.status, 400);
+    assert.match(((await res.json()) as { error: string }).error, needle);
+  }
+});

@@ -32,6 +32,16 @@ stubbed.
 - Add a user: allow their email in Access. State is already per `user_id`.
 - Grader prompt and `schedule()` mirror `drill.py`; keep both in sync or retire the CLI judge.
 
+## Offline
+Every time the home screen loads online, the app keeps the next 30 due cards (with references,
+no problems) in `localStorage`. With no connection the home screen becomes "Offline": you drill
+the cached cards and grade yourself against the checklist. Each answer goes into a queue
+(`drill.queue`) and is sent through `POST /api/sync/push` when the browser is back online (or
+on the next home screen). The queue keeps the time of the answer, and a retry never duplicates
+an attempt (unique uid). A save that fails while "online" (flaky network, expired Access
+session) is queued the same way. An attempt the server refuses is moved to `drill.rejected`.
+Problems (they need the browser runner) and model grading are online only.
+
 ## Problems and bug exercises
 `npm run cards` also publishes approved `problems/` and `bugs/` entries as cards with ids `problem:<id>`
 and `bug:<id>` (topics `problems`, `bugs`; needs `python3`, override with `PYTHON`). The sync fails
