@@ -57,10 +57,11 @@ worker. The result (passed/total) updates the card's schedule like `problems.py 
 - Not for code you do not trust: the runner blocks `fetch` and friends but is not a sandbox
   against a hostile program.
 
-## CLI sync (problem and bug progress)
+## CLI sync (cards, problems and bugs)
 `sync.py` shares attempts between the CLI and the web app: attempts are append-only events,
 each side rebuilds a card's schedule by replaying them in time order, so devices converge.
-`problems.py solve` and `bugs.py next` run it automatically when `DRILL_URL` is set.
+`drill.py daily`, `problems.py solve` and `bugs.py next` run it automatically when `DRILL_URL`
+is set.
 1. Existing database: `npm run db:migrate-sync` once (adds `attempts.uid`; fresh ones have it).
 2. Zero Trust > Access > Service auth: create a service token; add a policy with action
    "Service Auth" and that token to the same application. Copy Client ID and Client Secret.
@@ -68,8 +69,10 @@ each side rebuilds a card's schedule by replaying them in time order, so devices
    The token may only call `/api/sync/*`, and acts as `SYNC_USER`.
 4. CLI: `export DRILL_URL=https://<worker host> DRILL_CLIENT_ID=... DRILL_CLIENT_SECRET=...`
    then `./sync.py` (or `./sync.py --status`). `wrangler dev` needs no token.
-Only `problem:` and `bug:` cards sync. A problem that is not published (`npm run cards`) stays
-pending in the CLI and is retried on the next sync.
+Every card syncs: scores, per-criterion grades and timing travel, answer texts stay on the device
+where they were typed. The first sync uploads the whole local history. A card that is not
+published (`npm run cards`) stays pending in the CLI and is retried on the next sync.
+Deploy the Worker before running a newer CLI: an older Worker rejects card attempts.
 
 ## Grading without an API key
 Answers are graded by `LLM` in `wrangler.toml`:

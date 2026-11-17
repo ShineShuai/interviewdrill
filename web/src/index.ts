@@ -294,7 +294,7 @@ const exportAll: Handler = async ({ env, user }) => {
 };
 
 // --- CLI sync: attempts are append-only events; a card's schedule is the replay of its events ---
-const SYNC_KEY = /^(problem|bug):/;
+const SYNC_KEY = /^[A-Za-z0-9:_.-]{1,80}$/; // any card id
 const SYNC_TS = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/;
 const MAX_SYNC = 200;
 
@@ -306,6 +306,9 @@ interface SyncAttempt {
   passed: number | null;
   total: number | null;
   secs: number;
+  correct: number | null; // per-criterion grades of a graded card (0..5), if the sender has them
+  depth: number | null;
+  clarity: number | null;
 }
 
 function parseSyncAttempt(raw: unknown, i: number): SyncAttempt {
@@ -315,7 +318,7 @@ function parseSyncAttempt(raw: unknown, i: number): SyncAttempt {
   if (!raw || typeof raw !== "object") return bad("not an object");
   const a = raw as Record<string, unknown>;
   if (typeof a.uid !== "string" || a.uid.length < 1 || a.uid.length > 80) bad("bad uid");
-  if (typeof a.key !== "string" || !SYNC_KEY.test(a.key)) bad("key must be problem:* or bug:*");
+  if (typeof a.key !== "string" || !SYNC_KEY.test(a.key)) bad("key must be a card id");
   if (typeof a.ts !== "string" || !SYNC_TS.test(a.ts)) bad("ts must be UTC ...Z, seconds only");
   if (typeof a.q !== "number" || !(a.q >= 0 && a.q <= 5)) bad("q must be 0..5");
   const given = a.passed !== undefined && a.passed !== null;
@@ -325,9 +328,18 @@ function parseSyncAttempt(raw: unknown, i: number): SyncAttempt {
   if (passed !== null && total !== null && !(passed >= 0 && passed <= total && total <= 1000)) {
     bad("bad counts");
   }
+  const level = (name: "correct" | "depth" | "clarity"): number | null => {
+    const v = a[name];
+    if (v === undefined || v === null) return null;
+    if (!(typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= 5)) {
+      return bad(`${name} must be an integer 0..5`);
+    }
+    return v;
+  };
   return {
     uid: a.uid as string, key: a.key as string, ts: a.ts as string, q: a.q as number, passed,
     total, secs: Math.min(3600, Math.max(0, Number(a.secs) || 0)),
+    correct: level("correct"), depth: level("depth"), clarity: level("clarity"),
   };
 }
 
@@ -359,9 +371,7 @@ const syncPush: Handler = async ({ req, env, user }) => {
     throw new HttpError(400, `attempts must be a list of at most ${MAX_SYNC}`);
   }
   const attempts = list.map(parseSyncAttempt);
-  const cards = await env.DB.prepare(
-    "SELECT id FROM cards WHERE id LIKE 'problem:%' OR id LIKE 'bug:%'",
-  ).all<{ id: string }>();
+  const cards = await env.DB.prepare("SELECT id FROM cards").all<{ id: string }>();
   const known = new Set(cards.results.map((c) => c.id));
   const skipped = new Set<string>();
   const accepted = attempts.filter((a) => known.has(a.key) || !skipped.add(a.key));
@@ -370,11 +380,13 @@ const syncPush: Handler = async ({ req, env, user }) => {
       env.DB.prepare(
         "INSERT OR IGNORE INTO attempts(user_id, card_id, ts, secs, answer, correct, depth, " +
           "clarity, score, detail, uid) " +
-          "VALUES(?1, ?2, ?3, ?4, '(cli)', ?5, NULL, NULL, ?6, ?7, ?8)",
+          "VALUES(?1, ?2, ?3, ?4, '(cli)', ?5, ?6, ?7, ?8, ?9, ?10)",
       ).bind(
         user, a.key, a.ts, a.secs,
-        a.passed !== null && a.total ? Math.round((5 * a.passed) / a.total) : Math.round(a.q),
-        a.q, JSON.stringify({ mode: "cli", passed: a.passed, total: a.total }), a.uid,
+        a.correct ??
+          (a.passed !== null && a.total ? Math.round((5 * a.passed) / a.total) : Math.round(a.q)),
+        a.depth, a.clarity, a.q,
+        JSON.stringify({ mode: "cli", passed: a.passed, total: a.total }), a.uid,
       ),
     ),
   );
@@ -392,6 +404,10 @@ interface PulledRow {
   key: string;
   ts: string;
   q: number;
+  secs: number | null;
+  correct: number | null;
+  depth: number | null;
+  clarity: number | null;
   detail: string | null;
 }
 
@@ -400,8 +416,8 @@ const syncPull: Handler = async ({ env, url, user }) => {
   const limit = clampInt(url.searchParams.get("limit"), 1, 500, 500);
   const rows = await env.DB.prepare(
     "SELECT id, COALESCE(uid, 'web:' || id) AS uid, card_id AS key, ts, " +
-      "COALESCE(score, 0) AS q, detail FROM attempts WHERE user_id = ?1 AND id > ?2 " +
-      "AND (card_id LIKE 'problem:%' OR card_id LIKE 'bug:%') ORDER BY id LIMIT ?3",
+      "COALESCE(score, 0) AS q, secs, correct, depth, clarity, detail FROM attempts " +
+      "WHERE user_id = ?1 AND id > ?2 ORDER BY id LIMIT ?3",
   )
     .bind(user, after, limit)
     .all<PulledRow>();

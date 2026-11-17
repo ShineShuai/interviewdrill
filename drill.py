@@ -61,7 +61,8 @@ CREATE TABLE IF NOT EXISTS cards(
   due TEXT DEFAULT '');
 CREATE TABLE IF NOT EXISTS attempts(
   id INTEGER PRIMARY KEY, card_id TEXT, ts TEXT, secs REAL, answer TEXT,
-  correct INTEGER, depth INTEGER, clarity INTEGER, score REAL, detail TEXT);
+  correct INTEGER, depth INTEGER, clarity INTEGER, score REAL, detail TEXT,
+  uid TEXT, pushed INTEGER DEFAULT 0);
 """
 
 
@@ -83,11 +84,21 @@ def load_cards(path: Path | None = None) -> list[dict]:
     return cards
 
 
+def migrate_attempts(db: sqlite3.Connection) -> None:
+    """Add the sync columns to a database created before sync covered regular cards."""
+    cols = {r[1] for r in db.execute("PRAGMA table_info(attempts)")}
+    for name, ddl in (("uid", "TEXT"), ("pushed", "INTEGER DEFAULT 0")):
+        if name not in cols:
+            db.execute(f"ALTER TABLE attempts ADD COLUMN {name} {ddl}")
+    db.execute("CREATE UNIQUE INDEX IF NOT EXISTS attempts_uid ON attempts(uid)")
+
+
 def connect() -> sqlite3.Connection:
     HOME.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(HOME / "drill.db")
     db.row_factory = sqlite3.Row
     db.executescript(SCHEMA)
+    migrate_attempts(db)
     cards = load_cards()
     for c in cards:
         db.execute(
@@ -249,6 +260,10 @@ def cmd_daily(args: argparse.Namespace) -> None:
         )
         db.commit()
         show(g, q, interval)
+    if os.environ.get("DRILL_URL"):
+        import problems  # lazy: problems.py imports this module
+
+        problems.autosync(problems.connect())
 
 
 def cmd_report(args: argparse.Namespace) -> None:

@@ -1,11 +1,14 @@
+import argparse
 import contextlib
 import io
 import json
 import os
+import shutil
 import sqlite3
 import tempfile
 import threading
 import unittest
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
@@ -307,6 +310,210 @@ class PullTest(Base):
         self.assertEqual(b.execute("SELECT COUNT(*) FROM ex_attempts").fetchone()[0], 3)
 
 
+class CardSyncTest(Base):
+    """Regular cards (not problems or bugs) sync through the same events."""
+
+    def card(self, db, card_id="go-chan"):
+        db.execute("INSERT OR IGNORE INTO cards(id, topic, question, ref) VALUES(?,'go','Q','- r')",
+                   (card_id,))
+
+    def attempt(self, db, card_id, ts, q, uid=None, pushed=0, grades=(4, 3, 5), secs=12.4):
+        db.execute("INSERT INTO attempts(card_id, ts, secs, answer, correct, depth, clarity, "
+                   "score, detail, uid, pushed) VALUES(?,?,?,'a',?,?,?,?,'{}',?,?)",
+                   (card_id, ts, secs, *grades, q, uid, pushed))
+        db.commit()
+
+    def test_legacy_attempts_table_is_upgraded_and_history_is_marked_unpushed(self):
+        (self.root / "home").mkdir()
+        raw = sqlite3.connect(self.root / "home" / "drill.db")
+        raw.executescript(
+            "CREATE TABLE attempts(id INTEGER PRIMARY KEY, card_id TEXT, ts TEXT, secs REAL,"
+            " answer TEXT, correct INTEGER, depth INTEGER, clarity INTEGER, score REAL,"
+            " detail TEXT);"
+            "INSERT INTO attempts(card_id, ts, secs, answer, correct, depth, clarity, score)"
+            " VALUES('go-chan', '2026-11-01T10:00:00+00:00', 5, 'a', 4, 3, 5, 3.9);")
+        raw.commit()
+        raw.close()
+        db = problems.connect()
+        row = db.execute("SELECT uid, pushed FROM attempts").fetchone()
+        self.assertEqual((row["uid"], row["pushed"]), (None, 0))
+        unique = [r[1] for r in db.execute("PRAGMA index_list(attempts)") if r[2]]
+        self.assertIn("attempts_uid", unique)
+        sync.assign_uids(db)
+        sync.assign_uids(db)  # idempotent
+        dev = problems.device_id(db)
+        self.assertEqual(db.execute("SELECT uid FROM attempts").fetchone()[0], f"{dev}:c1")
+        self.assertEqual(problems.connect().execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 1)
+
+    def test_push_sends_card_attempts_after_exercises_with_namespaced_uids(self):
+        db = problems.connect()
+        dev = problems.device_id(db)
+        self.card(db)
+        self.insert(db, "problem:a", "2026-11-01T09:00:00+00:00", 5, 15, 15, f"{dev}:1")
+        self.attempt(db, "go-chan", "2026-11-02T09:00:00+00:00", 3.9)  # no uid yet
+        self.attempt(db, "go-chan", "2026-11-03T09:00:00+00:00", 5.0, uid="web:9", pushed=1)
+        reply = {"accepted": 1, "duplicates": 0, "skipped": []}
+        t = Fake(reply, reply)
+        out = sync.push(db, t)
+        self.assertEqual([c[2]["attempts"][0]["key"] for c in t.calls], ["problem:a", "go-chan"])
+        self.assertEqual(t.calls[1][2]["attempts"], [
+            {"uid": f"{dev}:c1", "key": "go-chan", "ts": "2026-11-02T09:00:00Z", "q": 3.9,
+             "secs": 12, "correct": 4, "depth": 3, "clarity": 5}])
+        self.assertEqual((out["pushed"], out["skipped"]), (2, set()))
+        left = db.execute("SELECT COUNT(*) FROM attempts WHERE pushed = 0").fetchone()[0]
+        self.assertEqual(left, 0)
+        self.assertEqual(sync.push(db, Fake())["pushed"], 0)  # nothing left, no request
+
+    def test_an_unpublished_card_stays_pending(self):
+        db = problems.connect()
+        self.card(db)
+        self.attempt(db, "go-chan", "2026-11-02T09:00:00+00:00", 3.9)
+        out = sync.push(db, Fake({"accepted": 0, "duplicates": 0, "skipped": ["go-chan"]}))
+        self.assertEqual(out["skipped"], {"go-chan"})
+        self.assertEqual(db.execute("SELECT COUNT(*) FROM attempts WHERE pushed = 0")
+                         .fetchone()[0], 1)
+
+    def test_pull_stores_card_attempts_with_grades_and_reschedules(self):
+        db = problems.connect()
+        self.card(db)
+        self.attempt(db, "go-chan", "2026-11-01T09:00:00+00:00", 5.0, uid="dev:c1", pushed=1)
+        rows = [
+            {"id": 1, "uid": "dev:c1", "key": "go-chan", "ts": "2026-11-01T09:00:00Z",
+             "q": 5.0, "secs": 12, "correct": 5, "depth": 5, "clarity": 5},  # echo of our own
+            {"id": 2, "uid": "web:2", "key": "go-chan", "ts": "2026-11-04T09:00:00Z", "q": 1.0,
+             "secs": 30, "correct": 1, "depth": 2, "clarity": 0},
+            {"id": 3, "uid": "web:3", "key": "go-chan", "ts": "2026-11-05T09:00:00Z", "q": 3.6},
+        ]  # the last row comes from an older server: no secs or grades
+        sync.sync(db, Fake({"attempts": rows, "next": 3}))
+        got = db.execute("SELECT ts, secs, answer, correct, depth, clarity, score, pushed "
+                         "FROM attempts WHERE uid LIKE 'web:%' ORDER BY id").fetchall()
+        self.assertEqual([tuple(r) for r in got], [
+            ("2026-11-04T09:00:00+00:00", 30, "(web)", 1, 2, 0, 1.0, 1),
+            ("2026-11-05T09:00:00+00:00", 0, "(web)", 4, 4, 4, 3.6, 1),
+        ])
+        self.assertEqual(db.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 3)
+        ease, interval, reps = 2.5, 0.0, 0
+        for q in (5.0, 1.0, 3.6):
+            ease, interval, reps = drill.schedule(ease, interval, reps, q)
+        card = db.execute("SELECT ease, interval, reps, due FROM cards WHERE id='go-chan'").fetchone()
+        self.assertEqual((card["ease"], card["interval"], card["reps"]), (ease, interval, reps))
+        self.assertEqual(card["due"], sync.from_z("2026-11-05T09:00:00Z")[:-6]
+                         and (datetime.fromisoformat("2026-11-05T09:00:00+00:00")
+                              + timedelta(days=interval)).isoformat(timespec="seconds"))
+        self.assertEqual(sync.push(db, Fake())["pushed"], 0)  # pulled rows are never pushed back
+
+    def test_two_devices_converge_on_a_regular_card(self):
+        server = {"attempts": []}
+
+        def transport_for():
+            def call(method, path, body=None):
+                if method == "POST":
+                    seen = {a["uid"] for a in server["attempts"]}
+                    new = [a for a in body["attempts"] if a["uid"] not in seen]
+                    for a in new:
+                        server["attempts"].append({**a, "id": len(server["attempts"]) + 1})
+                    return {"accepted": len(new), "duplicates": len(body["attempts"]) - len(new),
+                            "skipped": []}
+                after = int(path.split("after=")[1].split("&")[0])
+                rows = [a for a in server["attempts"] if a["id"] > after]
+                return {"attempts": rows, "next": rows[-1]["id"] if rows else after}
+            return call
+
+        dbs = []
+        for name in ("a", "b"):
+            with mock.patch.object(drill, "HOME", self.root / name):
+                dbs.append(problems.connect())
+        a, b = dbs
+        for db in dbs:
+            self.card(db)
+        self.attempt(a, "go-chan", "2026-11-01T09:00:00+00:00", 5.0)
+        self.attempt(b, "go-chan", "2026-11-03T09:00:00+00:00", 2.0)
+        self.attempt(a, "go-chan", "2026-11-05T09:00:00+00:00", 4.5)
+        for db in (a, b, a, b):
+            sync.sync(db, transport_for())
+
+        def read(db):
+            return tuple(db.execute("SELECT ease, interval, reps, due FROM cards "
+                                    "WHERE id = 'go-chan'").fetchone())
+
+        self.assertEqual(read(a), read(b))
+        for db in (a, b):
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 3)
+
+    def test_status_counts_card_attempts_too(self):
+        db = problems.connect()
+        self.card(db)
+        self.attempt(db, "go-chan", "2026-11-02T09:00:00+00:00", 3.9)
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {"DRILL_URL": "http://x"}), contextlib.redirect_stdout(out):
+            sync.cmd_status(db)
+        self.assertIn("attempts not yet pushed: 1", out.getvalue())
+
+    def run_daily(self, env, home):
+        (self.root / "cards" / "t.md").write_text("## t-a | Q?\n- one\n- two\n- three\n")
+        grade = {"correct": 4, "depth": 4, "clarity": 4, "missed": [], "errors": [], "followup": ""}
+        args = argparse.Namespace(n=1, topic=None, speak=False)
+        with mock.patch.dict(os.environ, env), \
+                mock.patch.object(drill, "HOME", self.root / home), \
+                mock.patch.object(drill, "read_answer", return_value="my answer"), \
+                mock.patch.object(drill, "grade", return_value=grade), \
+                mock.patch.object(problems, "autosync") as auto, \
+                contextlib.redirect_stdout(io.StringIO()):
+            drill.cmd_daily(args)
+        return auto
+
+    def test_a_daily_session_syncs_when_a_url_is_configured(self):
+        os.environ.pop("DRILL_URL", None)
+        self.assertFalse(self.run_daily({}, "no-url").called)
+        auto = self.run_daily({"DRILL_URL": "http://x"}, "with-url")
+        auto.assert_called_once()
+        db = auto.call_args.args[0]
+        self.assertEqual(db.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 1)
+
+
+class WorkerRoundTripTest(Base):
+    """The Python CLI against the real Worker (ui-server.ts: in-memory D1, real cards)."""
+
+    @unittest.skipUnless(shutil.which("node"), "node is not installed")
+    def test_cli_and_web_share_attempts_of_a_regular_card(self):
+        try:
+            from test_web_ui import serve  # starts web/test/ui-server.ts on a free port
+        except ImportError:
+            self.skipTest("test_web_ui.py is not in this checkout")
+
+        with serve() as base:
+            http = sync.Http(base)
+            db = problems.connect()
+            db.execute("INSERT INTO cards(id, topic, question, ref) VALUES('go-chan','go','Q','- r')")
+            db.execute("INSERT INTO attempts(card_id, ts, secs, answer, correct, depth, clarity, "
+                       "score, detail) VALUES('go-chan','2026-11-01T09:00:00+00:00',12.4,'a',4,3,5,"
+                       "3.9,'{}')")
+            db.commit()
+            stats = sync.sync(db, http)
+            self.assertEqual((stats["pushed"], stats["pulled"], stats["skipped"]), (1, 0, []))
+            self.assertEqual(sync.sync(db, http)["pushed"], 0)  # nothing new, nothing resent
+            # the web app records a self-graded attempt on the same card
+            web = http("POST", "/api/self-grade",
+                       {"card_id": "go-chan", "answer": "x", "secs": 5, "hit": [0, 1]})
+            self.assertEqual(web["score"], 2.5)
+            stats = sync.sync(db, http)
+            self.assertEqual((stats["pushed"], stats["pulled"]), (0, 1))
+            export = http("GET", "/api/export")
+            server = {r["uid"] if "uid" in r else r["id"]: r for r in export["attempts"]}
+            self.assertEqual(len(server), 2)
+            grades = sorted((r["correct"], r["depth"], r["clarity"]) for r in export["attempts"])
+            self.assertEqual(grades, [(3, 3, 3), (4, 3, 5)])
+            local = db.execute("SELECT correct, depth, clarity, score FROM attempts "
+                               "ORDER BY ts").fetchall()
+            self.assertEqual([tuple(r) for r in local], [(4, 3, 5, 3.9), (3, 3, 3, 2.5)])
+            (state,) = export["card_state"]
+            card = db.execute("SELECT ease, interval, reps, due FROM cards "
+                              "WHERE id = 'go-chan'").fetchone()
+            self.assertEqual((card["ease"], card["interval"], card["reps"]),
+                             (state["ease"], state["interval"], state["reps"]))
+            self.assertEqual(sync.to_z(card["due"]), state["due"])
+
+
 class Handler(BaseHTTPRequestHandler):
     log: list = []
     reply = (200, "application/json", b'{"ok": true}')
@@ -431,15 +638,31 @@ def fixture_payload(root: Path) -> dict:
         for i, (key, ts, q, passed, total) in enumerate(events, 1):
             db.execute("INSERT INTO ex_attempts(key, ts, passed, total, detail, q, uid, pushed) "
                        "VALUES(?,?,?,?,?,?,?,0)", (key, ts, passed, total, "", q, f"fixture:{i}"))
+        db.execute("INSERT INTO cards(id, topic, question, ref) VALUES('go-chan','go','Q','- r')")
+        cards = [  # (ts, q, correct, depth, clarity), also out of time order
+            ("2026-11-01T09:00:00+00:00", 2.0, 2, 2, 2),
+            ("2026-11-06T09:00:00+00:00", 4.2, 4, 4, 5),
+            ("2026-11-03T09:00:00+00:00", 3.9, 4, 3, 5),
+        ]
+        for i, (ts, q, c, d, cl) in enumerate(cards, 1):
+            db.execute("INSERT INTO attempts(card_id, ts, secs, answer, correct, depth, clarity, "
+                       "score, detail, uid, pushed) VALUES('go-chan',?,12.4,'a',?,?,?,?,'{}',?,0)",
+                       (ts, c, d, cl, q, f"fixture:c{i}"))
         db.commit()
         rows = db.execute("SELECT * FROM ex_attempts ORDER BY id").fetchall()
+        card_rows = db.execute("SELECT * FROM attempts ORDER BY id").fetchall()
         expected = {}
         for key in ("problem:fixture-a", "bug:fixture-b"):
             sync.replay_local(db, key)
             expected[key] = dict(db.execute("SELECT ease, interval, reps, due FROM ex_state "
                                             "WHERE key = ?", (key,)).fetchone())
             expected[key]["due"] = sync.to_z(expected[key]["due"])
-        return {"attempts": [sync.attempt_json(r) for r in rows], "expected": expected}
+        sync.replay_card_local(db, "go-chan")
+        expected["go-chan"] = dict(db.execute("SELECT ease, interval, reps, due FROM cards "
+                                              "WHERE id = 'go-chan'").fetchone())
+        expected["go-chan"]["due"] = sync.to_z(expected["go-chan"]["due"])
+        wire = [sync.attempt_json(r) for r in rows] + [sync.card_attempt_json(r) for r in card_rows]
+        return {"attempts": wire, "expected": expected}
 
 
 class FixtureTest(Base):

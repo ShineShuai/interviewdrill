@@ -53,6 +53,36 @@
       "total": 5,
       "ts": "2026-11-09T10:00:00Z",
       "uid": "fixture:6"
+    },
+    {
+      "clarity": 2,
+      "correct": 2,
+      "depth": 2,
+      "key": "go-chan",
+      "q": 2.0,
+      "secs": 12,
+      "ts": "2026-11-01T09:00:00Z",
+      "uid": "fixture:c1"
+    },
+    {
+      "clarity": 5,
+      "correct": 4,
+      "depth": 4,
+      "key": "go-chan",
+      "q": 4.2,
+      "secs": 12,
+      "ts": "2026-11-06T09:00:00Z",
+      "uid": "fixture:c2"
+    },
+    {
+      "clarity": 5,
+      "correct": 4,
+      "depth": 3,
+      "key": "go-chan",
+      "q": 3.9,
+      "secs": 12,
+      "ts": "2026-11-03T09:00:00Z",
+      "uid": "fixture:c3"
     }
   ],
   "expected": {
@@ -61,6 +91,12 @@
       "ease": 2.4232,
       "interval": 1.0,
       "reps": 1
+    },
+    "go-chan": {
+      "due": "2026-11-09T09:00:00Z",
+      "ease": 2.311,
+      "interval": 3.0,
+      "reps": 2
     },
     "problem:fixture-a": {
       "due": "2026-11-08T09:00:00Z",

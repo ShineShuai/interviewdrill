@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""sync: share problem and bug progress between this CLI and the web app.
+"""sync: share progress (cards, problems and bugs) between this CLI and the web app.
 
   sync.py              push new local attempts, pull new web attempts, rebuild schedules
   sync.py --status     show the configuration and what is pending
@@ -9,6 +9,7 @@ Access service token that the application's policy allows; not needed for http:/
 
 Attempts are append-only events with a unique id. Each side rebuilds a card's schedule by
 replaying its events in time order, so devices converge whatever order they sync in.
+Answer texts stay where they were typed; only the scores and timing travel.
 """
 import argparse
 import json
@@ -64,6 +65,38 @@ def attempt_json(row) -> dict:
             "passed": row["passed"], "total": row["total"], "secs": 0}
 
 
+def card_attempt_json(row) -> dict:
+    """A regular card attempt on the wire; its uid is namespaced so it cannot meet an exercise's."""
+    return {"uid": row["uid"], "key": row["card_id"], "ts": to_z(row["ts"]),
+            "q": float(row["score"] or 0), "secs": round(row["secs"] or 0),
+            "correct": row["correct"], "depth": row["depth"], "clarity": row["clarity"]}
+
+
+def is_exercise(key: str) -> bool:
+    return key.startswith(("problem:", "bug:"))
+
+
+def assign_uids(db) -> None:
+    """Give attempts made on this device (before sync existed, or since the last sync) a uid."""
+    db.execute("UPDATE attempts SET uid = ? || ':c' || id WHERE uid IS NULL",
+               (problems.device_id(db),))
+    db.commit()
+
+
+def replay_card_local(db, card_id: str) -> None:
+    """Rebuild the schedule of a regular card from its attempts, oldest first."""
+    rows = db.execute("SELECT ts, COALESCE(score, 0) AS q FROM attempts WHERE card_id = ? "
+                      "ORDER BY ts, id", (card_id,)).fetchall()
+    if not rows:
+        return
+    ease, interval, reps = 2.5, 0.0, 0
+    for r in rows:
+        ease, interval, reps = drill.schedule(ease, interval, reps, r["q"])
+    due = (datetime.fromisoformat(rows[-1]["ts"]) + timedelta(days=interval))
+    db.execute("UPDATE cards SET ease = ?, interval = ?, reps = ?, due = ? WHERE id = ?",
+               (ease, interval, reps, due.isoformat(timespec="seconds"), card_id))
+
+
 def replay_local(db, key: str) -> None:
     """Rebuild ex_state for `key` from its attempts, oldest first (same fold as the Worker)."""
     rows = db.execute("SELECT key, ts, passed, total, q FROM ex_attempts WHERE key = ? "
@@ -83,26 +116,35 @@ def replay_local(db, key: str) -> None:
     )
 
 
-def push(db, transport: Transport) -> dict:
-    """Send attempts made on this device that the Worker has not confirmed yet."""
+def push_table(db, transport: Transport, table: str, to_json: Callable, out: dict) -> None:
+    """Send this device's unconfirmed rows of `table` in batches, oldest first."""
     dev = problems.device_id(db)
-    out = {"pushed": 0, "duplicates": 0, "skipped": set()}
     after = 0
     while True:
-        rows = db.execute("SELECT * FROM ex_attempts WHERE pushed = 0 AND uid LIKE ? AND id > ? "
+        rows = db.execute(f"SELECT * FROM {table} WHERE pushed = 0 AND uid LIKE ? AND id > ? "
                           "ORDER BY id LIMIT ?", (f"{dev}:%", after, BATCH)).fetchall()
         if not rows:
-            return out
+            return
         after = rows[-1]["id"]
-        resp = transport("POST", "/api/sync/push", {"attempts": [attempt_json(r) for r in rows]})
+        wire = [to_json(r) for r in rows]
+        resp = transport("POST", "/api/sync/push", {"attempts": wire})
         # keys not published to the web yet stay unpushed and are retried next time
         skipped = set(resp.get("skipped", []))
-        db.executemany("UPDATE ex_attempts SET pushed = 1 WHERE id = ?",
-                       [(r["id"],) for r in rows if r["key"] not in skipped])
+        db.executemany(f"UPDATE {table} SET pushed = 1 WHERE id = ?",
+                       [(r["id"],) for r, w in zip(rows, wire) if w["key"] not in skipped])
         db.commit()
         out["pushed"] += int(resp.get("accepted", 0))
         out["duplicates"] += int(resp.get("duplicates", 0))
         out["skipped"] |= skipped
+
+
+def push(db, transport: Transport) -> dict:
+    """Send attempts made on this device that the Worker has not confirmed yet."""
+    assign_uids(db)
+    out = {"pushed": 0, "duplicates": 0, "skipped": set()}
+    push_table(db, transport, "ex_attempts", attempt_json, out)
+    push_table(db, transport, "attempts", card_attempt_json, out)
+    return out
 
 
 def pull(db, transport: Transport) -> tuple[int, set[str]]:
@@ -113,14 +155,24 @@ def pull(db, transport: Transport) -> tuple[int, set[str]]:
         resp = transport("GET", f"/api/sync/pull?after={cursor}&limit={PULL}", None)
         rows = resp.get("attempts", [])
         for a in rows:
-            passed, total = a.get("passed"), a.get("total")
-            if passed is None or total is None:  # a graded answer without test counts
-                passed, total = round(a["q"]), 5
-            cur = db.execute(
-                "INSERT OR IGNORE INTO ex_attempts"
-                "(key, ts, passed, total, detail, q, uid, pushed) VALUES(?,?,?,?,?,?,?,1)",
-                (a["key"], from_z(a["ts"]), passed, total, json.dumps({"mode": "web"}),
-                 a["q"], a["uid"]))
+            if is_exercise(a["key"]):
+                passed, total = a.get("passed"), a.get("total")
+                if passed is None or total is None:  # a graded answer without test counts
+                    passed, total = round(a["q"]), 5
+                cur = db.execute(
+                    "INSERT OR IGNORE INTO ex_attempts"
+                    "(key, ts, passed, total, detail, q, uid, pushed) VALUES(?,?,?,?,?,?,?,1)",
+                    (a["key"], from_z(a["ts"]), passed, total, json.dumps({"mode": "web"}),
+                     a["q"], a["uid"]))
+            else:
+                level = round(a["q"])  # older servers send no per-criterion grades
+                grades = [a.get(k) if a.get(k) is not None else level
+                          for k in ("correct", "depth", "clarity")]
+                cur = db.execute(
+                    "INSERT OR IGNORE INTO attempts(card_id, ts, secs, answer, correct, depth, "
+                    "clarity, score, detail, uid, pushed) VALUES(?,?,?,?,?,?,?,?,?,?,1)",
+                    (a["key"], from_z(a["ts"]), a.get("secs") or 0, "(web)", *grades, a["q"],
+                     json.dumps({"mode": "web"}), a["uid"]))
             if cur.rowcount > 0:
                 new += 1
                 touched.add(a["key"])
@@ -138,7 +190,7 @@ def sync(db, transport: Transport) -> dict:
     pushed = push(db, transport)
     new, touched = pull(db, transport)
     for key in sorted(touched):
-        replay_local(db, key)
+        (replay_local if is_exercise(key) else replay_card_local)(db, key)
     db.commit()
     return {"pushed": pushed["pushed"], "duplicates": pushed["duplicates"],
             "skipped": sorted(pushed["skipped"]), "pulled": new}
@@ -183,8 +235,10 @@ def transport_from_env() -> Http:
 
 
 def cmd_status(db) -> None:
-    unpushed = db.execute("SELECT COUNT(*) FROM ex_attempts WHERE pushed = 0 AND uid LIKE ?",
-                          (f"{problems.device_id(db)}:%",)).fetchone()[0]
+    mine = f"{problems.device_id(db)}:%"
+    unpushed = sum(
+        db.execute(f"SELECT COUNT(*) FROM {t} WHERE pushed = 0 AND (uid LIKE ? OR uid IS NULL)",
+                   (mine,)).fetchone()[0] for t in ("ex_attempts", "attempts"))
     creds = bool(os.environ.get("DRILL_CLIENT_ID") and os.environ.get("DRILL_CLIENT_SECRET"))
     print(f"url: {os.environ.get('DRILL_URL') or '(DRILL_URL not set)'}\n"
           f"service token: {'set' if creds else 'not set'}\n"
