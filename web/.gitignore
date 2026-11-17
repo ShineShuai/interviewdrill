@@ -1,5 +1,5 @@
 node_modules/
 public/pyodide/
-public/katas/
+public/problems/
 .wrangler/
 .dev.vars

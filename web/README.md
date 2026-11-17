@@ -1,7 +1,7 @@
 # drill web
 
 Cloudflare Worker (API) + D1 + PWA. Cards come from `../cards/*.md` (shared with the CLI),
-plus approved katas and bug exercises (`../export_cards.py`).
+plus approved problems and bug exercises (`../export_cards.py`).
 
 ## Deploy
 ```
@@ -29,24 +29,24 @@ npm run db:init:local && npm run cards:local && npm run dev
 - Add a user: allow their email in Access. State is already per `user_id`.
 - Grader prompt and `schedule()` mirror `drill.py`; keep both in sync or retire the CLI judge.
 
-## Katas and bug exercises
-`npm run cards` also publishes approved `katas/` and `bugs/` entries as cards with ids `kata:<id>`
-and `bug:<id>` (topics `katas`, `bugs`; needs `python3`, override with `PYTHON`). The sync fails
+## Problems and bug exercises
+`npm run cards` also publishes approved `problems/` and `bugs/` entries as cards with ids `problem:<id>`
+and `bug:<id>` (topics `problems`, `bugs`; needs `python3`, override with `PYTHON`). The sync fails
 if the export fails, because a silent skip would prune them from D1.
 - Bugs: read the numbered C++ or Go, explain the class, cause and fix. Graded against the
   verified tool report (sanitizer, race detector or runtime) and diff.
-- Katas: explain algorithm, complexity and edge cases (code optional). Graded against the verified
+- Problems: explain algorithm, complexity and edge cases (code optional). Graded against the verified
   reference solution and the known wrong approaches. Nothing is executed on the web; run
-  `kata.py solve` locally for tests.
+  `problems.py solve` locally for tests.
 - The reference is shown after grading, never before.
 
-## Python katas in the browser
-Paste a Python solution (reads stdin, writes stdout) into a `kata:` card and press "Run as Python":
+## Python problems in the browser
+Paste a Python solution (reads stdin, writes stdout) into a `problem:` card and press "Run as Python":
 the verified tests run in a Web Worker with Pyodide, the network disabled, and a per-test time
 limit of 5x the CLI limit (WebAssembly is slower). A runaway program is killed by terminating the
-worker. The result (passed/total) updates the card's schedule like `kata.py solve` does.
+worker. The result (passed/total) updates the card's schedule like `problems.py solve` does.
 - `npm install` fetches Pyodide (`^0.27`); `npm run vendor` copies it to `public/pyodide/`.
-- `npm run katas` writes `public/katas/<id>.json` (tests) from `../katas`. Both run before
+- `npm run problems` writes `public/problems/<id>.json` (tests) from `../problems`. Both run before
   `npm run dev` and `npm run deploy`, and both folders are git-ignored.
 - The tests are plain static files, so the solution can peek at them; fine for one user.
 - CSP allows `wasm-unsafe-eval` for the runtime. If the browser console reports a CSP error
@@ -54,10 +54,10 @@ worker. The result (passed/total) updates the card's schedule like `kata.py solv
 - Not for code you do not trust: the runner blocks `fetch` and friends but is not a sandbox
   against a hostile program.
 
-## CLI sync (kata and bug progress)
+## CLI sync (problem and bug progress)
 `sync.py` shares attempts between the CLI and the web app: attempts are append-only events,
 each side rebuilds a card's schedule by replaying them in time order, so devices converge.
-`kata.py solve` and `bugs.py next` run it automatically when `DRILL_URL` is set.
+`problems.py solve` and `bugs.py next` run it automatically when `DRILL_URL` is set.
 1. Existing database: `npm run db:migrate-sync` once (adds `attempts.uid`; fresh ones have it).
 2. Zero Trust > Access > Service auth: create a service token; add a policy with action
    "Service Auth" and that token to the same application. Copy Client ID and Client Secret.
@@ -65,5 +65,5 @@ each side rebuilds a card's schedule by replaying them in time order, so devices
    The token may only call `/api/sync/*`, and acts as `SYNC_USER`.
 4. CLI: `export DRILL_URL=https://<worker host> DRILL_CLIENT_ID=... DRILL_CLIENT_SECRET=...`
    then `./sync.py` (or `./sync.py --status`). `wrangler dev` needs no token.
-Only `kata:` and `bug:` cards sync. A kata that is not published (`npm run cards`) stays
+Only `problem:` and `bug:` cards sync. A problem that is not published (`npm run cards`) stays
 pending in the CLI and is retried on the next sync.

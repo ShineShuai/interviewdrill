@@ -1,7 +1,7 @@
 {
   "attempts": [
     {
-      "key": "kata:fixture-a",
+      "key": "problem:fixture-a",
       "passed": 3,
       "q": 1.0,
       "secs": 0,
@@ -10,7 +10,7 @@
       "uid": "fixture:1"
     },
     {
-      "key": "kata:fixture-a",
+      "key": "problem:fixture-a",
       "passed": 12,
       "q": 3.0,
       "secs": 0,
@@ -19,7 +19,7 @@
       "uid": "fixture:2"
     },
     {
-      "key": "kata:fixture-a",
+      "key": "problem:fixture-a",
       "passed": 15,
       "q": 5.0,
       "secs": 0,
@@ -62,7 +62,7 @@
       "interval": 1.0,
       "reps": 1
     },
-    "kata:fixture-a": {
+    "problem:fixture-a": {
       "due": "2026-11-08T09:00:00Z",
       "ease": 2.26,
       "interval": 3.0,

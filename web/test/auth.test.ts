@@ -98,7 +98,7 @@ test("service tokens: only the configured client id, acting as the configured us
 
 test("a service token reaches the sync routes as SYNC_USER and nothing else", async () => {
   const db = fakeD1();
-  db.raw.exec("INSERT INTO cards VALUES('kata:a','katas','Q','- r')");
+  db.raw.exec("INSERT INTO cards VALUES('problem:a','problems','Q','- r')");
   const env = {
     DB: db as unknown as Env["DB"], TEAM_DOMAIN: TEAM, ACCESS_AUD: AUD,
     SYNC_CLIENT_ID: "abc.access", SYNC_USER: "me@x.org", ANTHROPIC_API_KEY: "k",
@@ -118,7 +118,7 @@ test("a service token reaches the sync routes as SYNC_USER and nothing else", as
     );
   const body = JSON.stringify({
     attempts: [
-      { uid: "d:1", key: "kata:a", ts: "2026-11-01T09:00:00Z", q: 5, passed: 1, total: 1 },
+      { uid: "d:1", key: "problem:a", ts: "2026-11-01T09:00:00Z", q: 5, passed: 1, total: 1 },
     ],
   });
   const pushed = await call("/api/sync/push", { method: "POST", body });
@@ -129,7 +129,7 @@ test("a service token reaches the sync routes as SYNC_USER and nothing else", as
   for (const [path, init] of [
     ["/api/status", {}], ["/api/export", {}],
     ["/api/attempt", { method: "POST", body: "{}" }], ["/api/stt", { method: "POST", body: "x" }],
-    ["/api/kata/result", { method: "POST", body: "{}" }],
+    ["/api/problem/result", { method: "POST", body: "{}" }],
   ] as [string, RequestInit][]) {
     assert.equal((await call(path, init)).status, 403, path);
   }

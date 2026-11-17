@@ -25,7 +25,7 @@ class JudgeHintTest(unittest.TestCase):
         plain = drill.system_for("go-chan")
         self.assertEqual(plain, drill.SYSTEM)
         self.assertIn("debugging exercise", drill.system_for("bug:uaf"))
-        self.assertIn("coding exercise", drill.system_for("kata:max-sum"))
+        self.assertIn("coding exercise", drill.system_for("problem:max-sum"))
         self.assertTrue(drill.system_for("bug:x").startswith(drill.SYSTEM))
         self.assertEqual(drill.system_for("bugfix"), drill.SYSTEM)
 

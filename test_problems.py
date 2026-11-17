@@ -10,7 +10,7 @@ from unittest import mock
 
 import drill
 import export_cards
-import kata
+import problems
 
 REF = """import sys
 a = list(map(int, sys.stdin.read().split()))[1:]
@@ -68,8 +68,8 @@ class Base(unittest.TestCase):
         cls.tmp = tempfile.TemporaryDirectory()
         root = Path(cls.tmp.name)
         cls.patches = [
-            mock.patch.object(kata, "KATAS", root / "katas"),
-            mock.patch.object(kata, "PENDING", root / "katas" / "_pending"),
+            mock.patch.object(problems, "PROBLEMS", root / "problems"),
+            mock.patch.object(problems, "PENDING", root / "problems" / "_pending"),
             mock.patch.object(drill, "HOME", root / "home"),
             mock.patch.object(drill, "CARDS", root / "cards"),
         ]
@@ -86,8 +86,8 @@ class Base(unittest.TestCase):
 
 class VerifyTest(Base):
     def test_good_spec_passes_and_writes_tests(self):
-        work = kata.PENDING / "good"
-        report, reason = kata.verify(SPEC, work, **FAST)
+        work = problems.PENDING / "good"
+        report, reason = problems.verify(SPEC, work, **FAST)
         self.assertEqual(reason, "")
         self.assertEqual((report["mutants"], report["mutants_killed"]), (2, 2))
         names = sorted(p.stem for p in (work / "tests").glob("*.in"))
@@ -95,7 +95,7 @@ class VerifyTest(Base):
         self.assertEqual((work / "tests" / "ex1.out").read_text().strip(), "7")
 
     def check_rejects(self, spec, needle):
-        report, reason = kata.verify(spec, kata.PENDING / "bad", **FAST)
+        report, reason = problems.verify(spec, problems.PENDING / "bad", **FAST)
         self.assertIsNone(report)
         self.assertIn(needle, reason)
 
@@ -126,21 +126,21 @@ class RepairTest(Base):
             calls.append((prev, feedback))
             return {**SPEC, "brute": "print(0)"} if len(calls) == 1 else SPEC
 
-        work, reason = kata.make_kata("arrays", 2, [], propose, repairs=1, **FAST)
+        work, reason = problems.make_problem("arrays", 2, [], propose, repairs=1, **FAST)
         self.assertEqual(reason, "")
         self.assertEqual(calls[0], (None, None))
         self.assertIn("disagree", calls[1][1])
         self.assertEqual(calls[1][0]["brute"], "print(0)")
-        meta = json.loads((work / "kata.json").read_text())
+        meta = json.loads((work / "problem.json").read_text())
         self.assertEqual((meta["id"], meta["topic"]), (work.name, "arrays"))
         shutil.rmtree(work)
 
     def test_gives_up_and_cleans_up(self):
         bad = {**SPEC, "brute": "print(0)"}
-        work, reason = kata.make_kata("arrays", 2, [], lambda *a: bad, repairs=1, **FAST)
+        work, reason = problems.make_problem("arrays", 2, [], lambda *a: bad, repairs=1, **FAST)
         self.assertIsNone(work)
         self.assertIn("disagree", reason)
-        self.assertEqual(list(kata.PENDING.glob("*")), [])
+        self.assertEqual(list(problems.PENDING.glob("*")), [])
 
     def test_similar_title_is_rejected_without_verification(self):
         seen = []
@@ -149,7 +149,8 @@ class RepairTest(Base):
             seen.append(args[-1])
             return SPEC
 
-        work, reason = kata.make_kata("a", 2, ["Maximum subarray sum"], propose, repairs=1, **FAST)
+        titles = ["Maximum subarray sum"]
+        work, reason = problems.make_problem("a", 2, titles, propose, repairs=1, **FAST)
         self.assertIsNone(work)
         self.assertIn("too similar", reason)
         self.assertEqual(len(seen), 2)
@@ -159,11 +160,11 @@ class PracticeTest(Base):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        work, reason = kata.make_kata("arrays", 2, [], lambda *a: SPEC, **FAST)
+        work, reason = problems.make_problem("arrays", 2, [], lambda *a: SPEC, **FAST)
         assert work, reason
         quiet = contextlib.redirect_stdout(io.StringIO())
         with mock.patch("builtins.input", side_effect=["a"]), quiet:
-            assert dict(kata.review()) == {"approved": 1}
+            assert dict(problems.review()) == {"approved": 1}
         cls.kid = work.name
         cls.sols = Path(cls.tmp.name, "sols")
         cls.sols.mkdir()
@@ -173,13 +174,13 @@ class PracticeTest(Base):
 
     def solve(self, name):
         cmd = [sys.executable, str(self.sols / f"{name}.py")]
-        return kata.run_tests(kata.KATAS / self.kid, cmd)
+        return problems.run_tests(problems.PROBLEMS / self.kid, cmd)
 
     def test_card_for_builds_a_web_exercise(self):
-        card = kata.card_for(kata.load_katas()[self.kid], kata.KATAS / self.kid)
-        self.assertEqual((card["id"], card["topic"]), (f"kata:{self.kid}", "katas"))
+        card = problems.card_for(problems.load_problems()[self.kid], problems.PROBLEMS / self.kid)
+        self.assertEqual((card["id"], card["topic"]), (f"problem:{self.kid}", "problems"))
         head, _, body = card["question"].partition("\n")
-        self.assertTrue(head.startswith("Kata: Maximum subarray sum - explain how you would"))
+        self.assertTrue(head.startswith("Problem: Maximum subarray sum - explain how you would"))
         self.assertIn("largest sum of a non-empty contiguous subarray", body)
         self.assertIn("Example 2\nInput:\n3\n-3 -1 -2\nOutput:\n-1", body)
         self.assertTrue(body.endswith("Time limit: 2.0s per test."))
@@ -188,7 +189,7 @@ class PracticeTest(Base):
         self.assertIn("Known wrong approach 2 (fails the tests)", card["ref"])
 
     def test_tests_payload_and_export(self):
-        payload = kata.tests_payload(kata.KATAS / self.kid)
+        payload = problems.tests_payload(problems.PROBLEMS / self.kid)
         self.assertEqual((payload["id"], payload["time_limit"]), (self.kid, 2.0))
         names = [t["name"] for t in payload["tests"]]
         self.assertEqual(names[:3], ["ex1", "ex2", "small01"])
@@ -203,18 +204,18 @@ class PracticeTest(Base):
         self.assertEqual(json.loads((out / f"{self.kid}.json").read_text()), payload)
 
     def test_export_includes_only_approved_exercises(self):
-        pending = kata.PENDING / "later"
+        pending = problems.PENDING / "later"
         pending.mkdir(parents=True, exist_ok=True)
-        (pending / "kata.json").write_text("{}")
+        (pending / "problem.json").write_text("{}")
         self.addCleanup(shutil.rmtree, pending)
         cards = export_cards.exercise_cards()
-        self.assertEqual([c["id"] for c in cards if c["id"].startswith("kata:")],
-                         [f"kata:{self.kid}"])
+        self.assertEqual([c["id"] for c in cards if c["id"].startswith("problem:")],
+                         [f"problem:{self.kid}"])
         self.assertEqual(json.loads(json.dumps(cards)), cards)
 
-    def test_review_moved_kata_out_of_pending(self):
-        self.assertIn(self.kid, kata.load_katas())
-        self.assertEqual(list(kata.PENDING.glob("*/kata.json")), [])
+    def test_review_moved_problem_out_of_pending(self):
+        self.assertIn(self.kid, problems.load_problems())
+        self.assertEqual(list(problems.PENDING.glob("*/problem.json")), [])
 
     def test_correct_solution_passes_everything(self):
         results = self.solve("good")
@@ -224,7 +225,7 @@ class PracticeTest(Base):
     def summary(self, results, reveal=False):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            kata.summarize(results, reveal)
+            problems.summarize(results, reveal)
         return out.getvalue()
 
     def test_example_failures_are_shown_hidden_ones_are_not(self):
@@ -247,21 +248,21 @@ class PracticeTest(Base):
         cmd = [sys.executable, str(self.sols / "good.py")]
         args = mock.Mock(id=self.kid, reveal=False, cmd=cmd)
         with contextlib.redirect_stdout(io.StringIO()):
-            kata.cmd_solve(args)
-        db = kata.connect()
+            problems.cmd_solve(args)
+        db = problems.connect()
         row = db.execute("SELECT passed, total FROM ex_attempts WHERE key = ?",
-                         (f"kata:{self.kid}",)).fetchone()
+                         (f"problem:{self.kid}",)).fetchone()
         self.assertEqual(row[0], row[1])
-        self.assertIsNone(kata.pick(db, "kata", [self.kid]))  # solved, not due yet
+        self.assertIsNone(problems.pick(db, "problem", [self.kid]))  # solved, not due yet
 
 
 class CliTest(unittest.TestCase):
     def test_everything_after_double_dash_is_the_command(self):
         seen = []
-        argv = ["kata.py", "solve", "abc", "--reveal", "--", "./a.out", "--flag", "x"]
+        argv = ["problems.py", "solve", "abc", "--reveal", "--", "./a.out", "--flag", "x"]
         with mock.patch.object(sys, "argv", argv):
-            with mock.patch.object(kata, "cmd_solve", seen.append):
-                kata.main()
+            with mock.patch.object(problems, "cmd_solve", seen.append):
+                problems.main()
         (args,) = seen
         expected = ("abc", True, ["./a.out", "--flag", "x"])
         self.assertEqual((args.id, args.reveal, args.cmd), expected)
@@ -269,15 +270,15 @@ class CliTest(unittest.TestCase):
 
 class ProgressTest(Base):
     def test_record_and_pick(self):
-        db = kata.connect()
+        db = problems.connect()
         first = mock.Mock(choice=lambda xs: xs[0])
-        self.assertEqual(kata.pick(db, "bug", ["a", "b"], rng=first), "a")
-        self.assertEqual(kata.record(db, "bug:a", 5, 4, 4), 1.0)
-        self.assertEqual(kata.record(db, "bug:a", 5, 4, 4), 3.0)
-        self.assertEqual(kata.pick(db, "bug", ["a", "b"], rng=first), "b")
-        self.assertEqual(kata.record(db, "bug:b", 1, 0, 4), 1.0)  # failure resets
+        self.assertEqual(problems.pick(db, "bug", ["a", "b"], rng=first), "a")
+        self.assertEqual(problems.record(db, "bug:a", 5, 4, 4), 1.0)
+        self.assertEqual(problems.record(db, "bug:a", 5, 4, 4), 3.0)
+        self.assertEqual(problems.pick(db, "bug", ["a", "b"], rng=first), "b")
+        self.assertEqual(problems.record(db, "bug:b", 1, 0, 4), 1.0)  # failure resets
         db.execute("UPDATE ex_state SET due = '2000-01-01T00:00:00Z' WHERE key = 'bug:a'")
-        self.assertEqual(kata.pick(db, "bug", ["a", "b"]), "a")  # overdue wins
+        self.assertEqual(problems.pick(db, "bug", ["a", "b"]), "a")  # overdue wins
 
 
 if __name__ == "__main__":

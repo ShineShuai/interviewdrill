@@ -24,7 +24,7 @@ from pathlib import Path
 
 import drill
 import gen
-import kata
+import problems
 import sandbox
 
 BUGS = Path(os.environ.get("DRILL_BUGS", Path(__file__).parent / "bugs"))
@@ -341,7 +341,7 @@ def review() -> Counter:
 
 def practice(db, category: str | None = None, rng=random) -> bool:
     bugs = {k: m for k, m in load_bugs().items() if not category or m["category"] == category}
-    bid = kata.pick(db, "bug", sorted(bugs), rng)
+    bid = problems.pick(db, "bug", sorted(bugs), rng)
     if not bid:
         print("nothing due" if bugs else "no bugs to practice; run: bugs.py gen")
         return False
@@ -351,10 +351,10 @@ def practice(db, category: str | None = None, rng=random) -> bool:
     print("Name the bug class, the root cause and the fix (finish with an empty line):")
     g = drill.judge(card, drill.read_answer())
     q = drill.score(g)
-    days = kata.record(db, f"bug:{bid}", q, round(q), 5, json.dumps(g))
+    days = problems.record(db, f"bug:{bid}", q, round(q), 5, json.dumps(g))
     drill.show(g, q, days)
     print(f"\nground truth:\n{ground_truth(meta)}")
-    kata.autosync(db)
+    problems.autosync(db)
     return True
 
 
@@ -380,7 +380,7 @@ def cmd_review(a):
 
 
 def cmd_next(a):
-    practice(kata.connect(), a.category)
+    practice(problems.connect(), a.category)
 
 
 def cmd_status(a):

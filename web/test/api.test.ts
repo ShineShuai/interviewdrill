@@ -133,10 +133,13 @@ test("exercise cards: grader gets the kind hint and multi-line question round-tr
   assert.ok(!(await topics()).includes("bugs")); // answered, so no longer due
 });
 
-test("kata result from the browser runner: graded by pass ratio, no LLM involved", async () => {
-  db.raw.prepare("INSERT INTO cards VALUES('kata:max', 'katas', 'Kata: x', '- ref')").run();
+test("problem result from the browser runner: graded by pass ratio, no LLM involved", async () => {
+  db.raw
+    .prepare("INSERT INTO cards VALUES('problem:max', 'problems', 'Problem: x', '- ref')")
+    .run();
   const result = async (passed: number, total: number) => {
-    const res = await post("/api/kata/result", { card_id: "kata:max", passed, total, secs: 40 });
+    const body = { card_id: "problem:max", passed, total, secs: 40 };
+    const res = await post("/api/problem/result", body);
     assert.equal(res.status, 200);
     return (await res.json()) as { score: number; interval: number };
   };
@@ -152,21 +155,23 @@ test("kata result from the browser runner: graded by pass ratio, no LLM involved
   );
   assert.deepEqual(JSON.parse(String(rows[2].detail)), { mode: "browser", passed: 3, total: 15 });
   assert.equal(sent.length, 0);
-  const state = db.raw.prepare("SELECT reps FROM card_state WHERE card_id = 'kata:max'").get();
+  const state = db.raw.prepare("SELECT reps FROM card_state WHERE card_id = 'problem:max'").get();
   assert.deepEqual({ ...state }, { reps: 0 }); // the failing run reset the card
 });
 
-test("kata result validates its input", async () => {
-  db.raw.prepare("INSERT INTO cards VALUES('kata:max', 'katas', 'Kata: x', '- ref')").run();
-  const status = async (body: object) => (await post("/api/kata/result", body)).status;
-  assert.equal(await status({ card_id: "go-chan", passed: 1, total: 1 }), 400); // not a kata
-  assert.equal(await status({ card_id: "kata:max", passed: 1, total: 0 }), 400);
-  assert.equal(await status({ card_id: "kata:max", passed: 5, total: 4 }), 400);
-  assert.equal(await status({ card_id: "kata:max", passed: -1, total: 4 }), 400);
-  assert.equal(await status({ card_id: "kata:max", passed: "x", total: 4 }), 400);
-  assert.equal(await status({ card_id: "kata:max", passed: 1, total: 5000 }), 400);
-  assert.equal(await status({ card_id: "kata:nope", passed: 1, total: 1 }), 404);
-  assert.equal((await call("/api/kata/result", { method: "POST", body: "[" })).status, 400);
+test("problem result validates its input", async () => {
+  db.raw
+    .prepare("INSERT INTO cards VALUES('problem:max', 'problems', 'Problem: x', '- ref')")
+    .run();
+  const status = async (body: object) => (await post("/api/problem/result", body)).status;
+  assert.equal(await status({ card_id: "go-chan", passed: 1, total: 1 }), 400); // not a problem
+  assert.equal(await status({ card_id: "problem:max", passed: 1, total: 0 }), 400);
+  assert.equal(await status({ card_id: "problem:max", passed: 5, total: 4 }), 400);
+  assert.equal(await status({ card_id: "problem:max", passed: -1, total: 4 }), 400);
+  assert.equal(await status({ card_id: "problem:max", passed: "x", total: 4 }), 400);
+  assert.equal(await status({ card_id: "problem:max", passed: 1, total: 5000 }), 400);
+  assert.equal(await status({ card_id: "problem:nope", passed: 1, total: 1 }), 404);
+  assert.equal((await call("/api/problem/result", { method: "POST", body: "[" })).status, 400);
 });
 
 test("grader failure maps to 502 and stores nothing", async () => {

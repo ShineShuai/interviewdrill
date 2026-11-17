@@ -31,7 +31,7 @@ const HINTS: [prefix: string, text: string][] = [
       "'clarity' = communication.",
   ],
   [
-    "kata:",
+    "problem:",
     "This is a coding exercise answered as an approach, pseudocode or code. The reference " +
       "solution is verified. 'correct' = the approach would give right answers within the " +
       "limits (any equal or better algorithm counts; penalize the known wrong approaches); " +

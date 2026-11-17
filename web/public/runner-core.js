@@ -1,10 +1,10 @@
-// Pure logic for running kata tests through a Worker-like adapter (browser worker or test fake).
+// Pure logic for running problem tests through a Worker-like adapter (browser worker or fake).
 // A worker is { run(code, input) -> Promise<{rc, out, err}>, kill() }; spawn() -> Promise<worker>.
 
 export const BROWSER_FACTOR = 5; // Python in WebAssembly is several times slower than CPython
 export const GROUPS = ["ex", "small", "large"];
 
-/** Same normalization as norm_out() in kata.py. */
+/** Same normalization as norm_out() in problems.py. */
 export const norm = (s) =>
   s.trim().split(/\r?\n/).map((ln) => ln.trimEnd()).join("\n");
 

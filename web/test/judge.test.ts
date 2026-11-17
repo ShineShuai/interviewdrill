@@ -6,7 +6,7 @@ test("exercise kinds get a grading hint, plain cards do not", () => {
   const plain = systemFor("go-chan");
   assert.ok(systemFor("bug:uaf").startsWith(plain));
   assert.match(systemFor("bug:uaf"), /debugging exercise/);
-  assert.match(systemFor("kata:max-sum"), /coding exercise/);
+  assert.match(systemFor("problem:max-sum"), /coding exercise/);
   assert.doesNotMatch(plain, /exercise/);
   assert.equal(systemFor("bugfix"), plain); // prefix needs the colon
 });

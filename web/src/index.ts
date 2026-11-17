@@ -159,13 +159,13 @@ const attempt: Handler = async ({ req, env, user }) => {
   return json({ grade, score: q, interval: nx.interval, ref: card.ref });
 };
 
-/** A kata run by the in-browser Python runner: no LLM, the client reports passed/total. */
-const kataResult: Handler = async ({ req, env, user }) => {
+/** A problem run by the in-browser Python runner: no LLM, the client reports passed/total. */
+const problemResult: Handler = async ({ req, env, user }) => {
   const body = await readJson(req);
   const cardId = String(body.card_id ?? "");
   const passed = Math.trunc(Number(body.passed));
   const total = Math.trunc(Number(body.total));
-  if (!cardId.startsWith("kata:")) throw new HttpError(400, "not a kata");
+  if (!cardId.startsWith("problem:")) throw new HttpError(400, "not a problem");
   if (!(total >= 1 && total <= 1000 && passed >= 0 && passed <= total)) {
     throw new HttpError(400, "invalid counts");
   }
@@ -243,7 +243,7 @@ const exportAll: Handler = async ({ env, user }) => {
 };
 
 // --- CLI sync: attempts are append-only events; a card's schedule is the replay of its events ---
-const SYNC_KEY = /^(kata|bug):/;
+const SYNC_KEY = /^(problem|bug):/;
 const SYNC_TS = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/;
 const MAX_SYNC = 200;
 
@@ -264,7 +264,7 @@ function parseSyncAttempt(raw: unknown, i: number): SyncAttempt {
   if (!raw || typeof raw !== "object") return bad("not an object");
   const a = raw as Record<string, unknown>;
   if (typeof a.uid !== "string" || a.uid.length < 1 || a.uid.length > 80) bad("bad uid");
-  if (typeof a.key !== "string" || !SYNC_KEY.test(a.key)) bad("key must be kata:* or bug:*");
+  if (typeof a.key !== "string" || !SYNC_KEY.test(a.key)) bad("key must be problem:* or bug:*");
   if (typeof a.ts !== "string" || !SYNC_TS.test(a.ts)) bad("ts must be UTC ...Z, seconds only");
   if (typeof a.q !== "number" || !(a.q >= 0 && a.q <= 5)) bad("q must be 0..5");
   const given = a.passed !== undefined && a.passed !== null;
@@ -309,7 +309,7 @@ const syncPush: Handler = async ({ req, env, user }) => {
   }
   const attempts = list.map(parseSyncAttempt);
   const cards = await env.DB.prepare(
-    "SELECT id FROM cards WHERE id LIKE 'kata:%' OR id LIKE 'bug:%'",
+    "SELECT id FROM cards WHERE id LIKE 'problem:%' OR id LIKE 'bug:%'",
   ).all<{ id: string }>();
   const known = new Set(cards.results.map((c) => c.id));
   const skipped = new Set<string>();
@@ -350,7 +350,7 @@ const syncPull: Handler = async ({ env, url, user }) => {
   const rows = await env.DB.prepare(
     "SELECT id, COALESCE(uid, 'web:' || id) AS uid, card_id AS key, ts, " +
       "COALESCE(score, 0) AS q, detail FROM attempts WHERE user_id = ?1 AND id > ?2 " +
-      "AND (card_id LIKE 'kata:%' OR card_id LIKE 'bug:%') ORDER BY id LIMIT ?3",
+      "AND (card_id LIKE 'problem:%' OR card_id LIKE 'bug:%') ORDER BY id LIMIT ?3",
   )
     .bind(user, after, limit)
     .all<PulledRow>();
@@ -372,7 +372,7 @@ const ROUTES: Record<string, Handler> = {
   "GET /api/status": status,
   "GET /api/next": next,
   "POST /api/attempt": attempt,
-  "POST /api/kata/result": kataResult,
+  "POST /api/problem/result": problemResult,
   "POST /api/sync/push": syncPush,
   "GET /api/sync/pull": syncPull,
   "POST /api/stt": stt,

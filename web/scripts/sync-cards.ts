@@ -1,4 +1,4 @@
-// Upsert cards into D1: ../cards/*.md plus approved katas and bug exercises (export_cards.py).
+// Upsert cards into D1: ../cards/*.md plus approved problems and bug exercises (export_cards.py).
 // Usage: node scripts/sync-cards.ts [--local|--remote]   (PYTHON overrides python3)
 import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";

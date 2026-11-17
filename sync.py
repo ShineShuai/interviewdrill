@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""sync: share kata and bug progress between this CLI and the web app.
+"""sync: share problem and bug progress between this CLI and the web app.
 
   sync.py              push new local attempts, pull new web attempts, rebuild schedules
   sync.py --status     show the configuration and what is pending
 Env: DRILL_URL (https://<worker host>), DRILL_CLIENT_ID and DRILL_CLIENT_SECRET (a Cloudflare
 Access service token that the application's policy allows; not needed for http://localhost).
-`kata.py solve` and `bugs.py next` call this automatically when DRILL_URL is set.
+`problems.py solve` and `bugs.py next` call this automatically when DRILL_URL is set.
 
 Attempts are append-only events with a unique id. Each side rebuilds a card's schedule by
 replaying its events in time order, so devices converge whatever order they sync in.
@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 from typing import Callable
 
 import drill
-import kata
+import problems
 
 BATCH = 200  # attempts per push request (the Worker accepts at most 200)
 PULL = 500  # attempts per pull request
@@ -44,7 +44,7 @@ def quality(row) -> float:
     if row["q"] is not None:
         return float(row["q"])
     passed, total = row["passed"], row["total"]
-    if row["key"].startswith("kata:"):
+    if row["key"].startswith("problem:"):
         return 5.0 if passed == total else 3.0 if passed >= 0.8 * total else 1.0
     return float(passed)  # bug attempts stored round(q) out of 5
 
@@ -85,7 +85,7 @@ def replay_local(db, key: str) -> None:
 
 def push(db, transport: Transport) -> dict:
     """Send attempts made on this device that the Worker has not confirmed yet."""
-    dev = kata.device_id(db)
+    dev = problems.device_id(db)
     out = {"pushed": 0, "duplicates": 0, "skipped": set()}
     after = 0
     while True:
@@ -184,11 +184,11 @@ def transport_from_env() -> Http:
 
 def cmd_status(db) -> None:
     unpushed = db.execute("SELECT COUNT(*) FROM ex_attempts WHERE pushed = 0 AND uid LIKE ?",
-                          (f"{kata.device_id(db)}:%",)).fetchone()[0]
+                          (f"{problems.device_id(db)}:%",)).fetchone()[0]
     creds = bool(os.environ.get("DRILL_CLIENT_ID") and os.environ.get("DRILL_CLIENT_SECRET"))
     print(f"url: {os.environ.get('DRILL_URL') or '(DRILL_URL not set)'}\n"
           f"service token: {'set' if creds else 'not set'}\n"
-          f"device: {kata.device_id(db)}\n"
+          f"device: {problems.device_id(db)}\n"
           f"attempts not yet pushed: {unpushed}\n"
           f"pull cursor: {get_state(db, 'pull_cursor', '0')}")
 
@@ -197,7 +197,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--status", action="store_true")
     args = ap.parse_args()
-    db = kata.connect()
+    db = problems.connect()
     if args.status:
         return cmd_status(db)
     try:

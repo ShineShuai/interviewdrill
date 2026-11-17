@@ -16,7 +16,7 @@ function fake(program) {
 }
 const T = (name, input, expected) => ({ name, input, expected });
 
-test("norm matches kata.py norm_out", () => {
+test("norm matches problems.py norm_out", () => {
   assert.equal(norm("  a  \r\nb\t\n\n"), "a\nb");
   assert.equal(norm("7\n"), "7");
   assert.equal(norm(""), "");

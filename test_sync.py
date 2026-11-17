@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest import mock
 
 import drill
-import kata
+import problems
 import sync
 
 FIXTURE = Path(__file__).parent / "web" / "test" / "fixtures" / "sync-push.json"
@@ -56,25 +56,47 @@ class MigrationTest(Base):
             "CREATE TABLE ex_attempts(id INTEGER PRIMARY KEY, key TEXT, ts TEXT, passed INTEGER,"
             " total INTEGER, detail TEXT);"
             "INSERT INTO ex_attempts(key, ts, passed, total, detail) VALUES"
+            "('problem:a', '2026-11-01T10:00:00+00:00', 3, 3, ''),"
+            "('bug:b', '2026-11-02T10:00:00+00:00', 4, 5, '{}');")
+        raw.commit()
+        raw.close()
+        db = problems.connect()
+        dev = problems.device_id(db)
+        rows = db.execute("SELECT id, uid, q, pushed FROM ex_attempts ORDER BY id").fetchall()
+        self.assertEqual([(r["uid"], r["q"], r["pushed"]) for r in rows],
+                         [(f"{dev}:1", None, 0), (f"{dev}:2", None, 0)])
+        again = problems.connect()  # idempotent, same device
+        self.assertEqual(problems.device_id(again), dev)
+        self.assertEqual(again.execute("SELECT COUNT(*) FROM ex_attempts").fetchone()[0], 2)
+
+    def test_progress_recorded_under_the_old_kata_name_is_renamed(self):
+        (self.root / "home").mkdir()
+        raw = sqlite3.connect(self.root / "home" / "drill.db")
+        raw.executescript(
+            "CREATE TABLE ex_state(key TEXT PRIMARY KEY, ease REAL DEFAULT 2.5, "
+            "interval REAL DEFAULT 0, reps INTEGER DEFAULT 0, due TEXT DEFAULT '');"
+            "CREATE TABLE ex_attempts(id INTEGER PRIMARY KEY, key TEXT, ts TEXT, passed INTEGER,"
+            " total INTEGER, detail TEXT);"
+            "INSERT INTO ex_state(key, reps) VALUES('kata:a', 3), ('bug:b', 1);"
+            "INSERT INTO ex_attempts(key, ts, passed, total, detail) VALUES"
             "('kata:a', '2026-11-01T10:00:00+00:00', 3, 3, ''),"
             "('bug:b', '2026-11-02T10:00:00+00:00', 4, 5, '{}');")
         raw.commit()
         raw.close()
-        db = kata.connect()
-        dev = kata.device_id(db)
-        rows = db.execute("SELECT id, uid, q, pushed FROM ex_attempts ORDER BY id").fetchall()
-        self.assertEqual([(r["uid"], r["q"], r["pushed"]) for r in rows],
-                         [(f"{dev}:1", None, 0), (f"{dev}:2", None, 0)])
-        again = kata.connect()  # idempotent, same device
-        self.assertEqual(kata.device_id(again), dev)
-        self.assertEqual(again.execute("SELECT COUNT(*) FROM ex_attempts").fetchone()[0], 2)
+        db = problems.connect()
+        self.assertEqual([r[0] for r in db.execute("SELECT key FROM ex_state ORDER BY key")],
+                         ["bug:b", "problem:a"])
+        self.assertEqual(db.execute("SELECT reps FROM ex_state WHERE key = 'problem:a'")
+                         .fetchone()[0], 3)
+        self.assertEqual([r[0] for r in db.execute("SELECT key FROM ex_attempts ORDER BY id")],
+                         ["problem:a", "bug:b"])
 
     def test_record_stores_quality_and_a_unique_uid(self):
-        db = kata.connect()
-        kata.record(db, "kata:a", 5, 3, 3)
-        kata.record(db, "kata:a", 3, 2, 3)
+        db = problems.connect()
+        problems.record(db, "problem:a", 5, 3, 3)
+        problems.record(db, "problem:a", 3, 2, 3)
         rows = db.execute("SELECT q, uid, pushed FROM ex_attempts ORDER BY id").fetchall()
-        dev = kata.device_id(db)
+        dev = problems.device_id(db)
         self.assertEqual([r["q"] for r in rows], [5, 3])
         self.assertTrue(all(r["uid"].startswith(f"{dev}:") and r["pushed"] == 0 for r in rows))
         self.assertEqual(len({r["uid"] for r in rows}), 2)
@@ -83,9 +105,9 @@ class MigrationTest(Base):
         def row(key, passed, total, q=None):
             return {"key": key, "passed": passed, "total": total, "q": q}
 
-        self.assertEqual(sync.quality(row("kata:a", 15, 15)), 5.0)
-        self.assertEqual(sync.quality(row("kata:a", 12, 15)), 3.0)
-        self.assertEqual(sync.quality(row("kata:a", 3, 15)), 1.0)
+        self.assertEqual(sync.quality(row("problem:a", 15, 15)), 5.0)
+        self.assertEqual(sync.quality(row("problem:a", 12, 15)), 3.0)
+        self.assertEqual(sync.quality(row("problem:a", 3, 15)), 1.0)
         self.assertEqual(sync.quality(row("bug:b", 4, 5)), 4.0)
         self.assertEqual(sync.quality(row("bug:b", 4, 5, q=3.7)), 3.7)
 
@@ -104,11 +126,11 @@ class ReplayTest(Base):
             t = base + drill.timedelta(days=clock[0] + delta)
             return t.isoformat(timespec="seconds")
 
-        db = kata.connect()
+        db = problems.connect()
         with mock.patch.object(drill, "now", fake_now):
             for day, q in [(0, 1), (1, 5), (2, 5), (5, 3), (6, 0), (7, 5), (8, 5), (12, 4.2)]:
                 clock[0] = day
-                kata.record(db, "bug:x", q, round(q), 5)
+                problems.record(db, "bug:x", q, round(q), 5)
         live = dict(db.execute("SELECT ease, interval, reps, due FROM ex_state "
                                "WHERE key = 'bug:x'").fetchone())
         db.execute("DELETE FROM ex_state")
@@ -118,11 +140,11 @@ class ReplayTest(Base):
         self.assertEqual(replayed, live)
 
     def test_replay_orders_by_time_not_by_insertion(self):
-        db = kata.connect()
-        self.insert(db, "kata:a", "2026-11-05T09:00:00+00:00", 3, 12, 15, "d:1")
-        self.insert(db, "kata:a", "2026-11-01T09:00:00+00:00", 1, 3, 15, "d:2")
-        self.insert(db, "kata:a", "2026-11-02T09:00:00+00:00", 5, 15, 15, "d:3")
-        sync.replay_local(db, "kata:a")
+        db = problems.connect()
+        self.insert(db, "problem:a", "2026-11-05T09:00:00+00:00", 3, 12, 15, "d:1")
+        self.insert(db, "problem:a", "2026-11-01T09:00:00+00:00", 1, 3, 15, "d:2")
+        self.insert(db, "problem:a", "2026-11-02T09:00:00+00:00", 5, 15, 15, "d:3")
+        sync.replay_local(db, "problem:a")
         r = dict(db.execute("SELECT ease, interval, reps FROM ex_state").fetchone())
         s = (2.5, 0.0, 0)
         for q in (1, 5, 3):
@@ -130,29 +152,30 @@ class ReplayTest(Base):
         self.assertEqual((r["ease"], r["interval"], r["reps"]), s)
 
     def test_replay_of_nothing_changes_nothing(self):
-        db = kata.connect()
-        sync.replay_local(db, "kata:none")
+        db = problems.connect()
+        sync.replay_local(db, "problem:none")
         self.assertEqual(db.execute("SELECT COUNT(*) FROM ex_state").fetchone()[0], 0)
 
 
 class PushTest(Base):
     def seed(self, db):
-        dev = kata.device_id(db)
-        self.insert(db, "kata:a", "2026-11-01T09:00:00+00:00", 5, 15, 15, f"{dev}:1")
+        dev = problems.device_id(db)
+        self.insert(db, "problem:a", "2026-11-01T09:00:00+00:00", 5, 15, 15, f"{dev}:1")
         self.insert(db, "bug:b", "2026-11-02T09:00:00+00:00", 3.5, 4, 5, f"{dev}:2")
-        self.insert(db, "kata:a", "2026-11-03T09:00:00+00:00", 5, 15, 15, "web:7", pushed=1)
-        self.insert(db, "kata:a", "2026-11-04T09:00:00+00:00", 5, 15, 15, "otherdev:9", pushed=1)
+        self.insert(db, "problem:a", "2026-11-03T09:00:00+00:00", 5, 15, 15, "web:7", pushed=1)
+        self.insert(db, "problem:a", "2026-11-04T09:00:00+00:00", 5, 15, 15, "otherdev:9",
+                    pushed=1)
         return dev
 
     def test_pushes_only_own_unpushed_attempts_and_marks_them(self):
-        db = kata.connect()
+        db = problems.connect()
         dev = self.seed(db)
         t = Fake({"accepted": 2, "duplicates": 0, "skipped": []})
         out = sync.push(db, t)
         (method, path, body), = t.calls
         self.assertEqual((method, path), ("POST", "/api/sync/push"))
         self.assertEqual(body["attempts"], [
-            {"uid": f"{dev}:1", "key": "kata:a", "ts": "2026-11-01T09:00:00Z", "q": 5.0,
+            {"uid": f"{dev}:1", "key": "problem:a", "ts": "2026-11-01T09:00:00Z", "q": 5.0,
              "passed": 15, "total": 15, "secs": 0},
             {"uid": f"{dev}:2", "key": "bug:b", "ts": "2026-11-02T09:00:00Z", "q": 3.5,
              "passed": 4, "total": 5, "secs": 0},
@@ -163,7 +186,7 @@ class PushTest(Base):
         self.assertEqual(sync.push(db, Fake())["pushed"], 0)  # nothing left, no request made
 
     def test_skipped_keys_stay_pending_for_the_next_sync(self):
-        db = kata.connect()
+        db = problems.connect()
         self.seed(db)
         out = sync.push(db, Fake({"accepted": 1, "duplicates": 0, "skipped": ["bug:b"]}))
         self.assertEqual(out["skipped"], {"bug:b"})
@@ -174,36 +197,36 @@ class PushTest(Base):
         self.assertEqual([a["key"] for a in t.calls[0][2]["attempts"]], ["bug:b"])
 
     def test_batches_are_sent_in_order_and_skipped_rows_are_not_resent_in_one_run(self):
-        db = kata.connect()
-        dev = kata.device_id(db)
+        db = problems.connect()
+        dev = problems.device_id(db)
         for i in range(5):
-            key = "kata:skip" if i == 1 else "kata:a"
+            key = "problem:skip" if i == 1 else "problem:a"
             self.insert(db, key, f"2026-11-0{i + 1}T09:00:00+00:00", 5, 1, 1, f"{dev}:{i + 1}")
 
         def answer(method, path, body):
             keys = {a["key"] for a in body["attempts"]}
             return {"accepted": len(body["attempts"]), "duplicates": 0,
-                    "skipped": ["kata:skip"] if "kata:skip" in keys else []}
+                    "skipped": ["problem:skip"] if "problem:skip" in keys else []}
 
         with mock.patch.object(sync, "BATCH", 2):
             t = Fake(answer, answer, answer)
             out = sync.push(db, t)
         self.assertEqual([len(c[2]["attempts"]) for c in t.calls], [2, 2, 1])
-        self.assertEqual(out["skipped"], {"kata:skip"})
+        self.assertEqual(out["skipped"], {"problem:skip"})
         left = db.execute("SELECT key FROM ex_attempts WHERE pushed = 0").fetchall()
-        self.assertEqual([r["key"] for r in left], ["kata:skip"])
+        self.assertEqual([r["key"] for r in left], ["problem:skip"])
 
 
 class PullTest(Base):
-    def web(self, i, key="kata:a", ts="2026-11-02T09:00:00Z", q=5.0, passed=None, total=None,
+    def web(self, i, key="problem:a", ts="2026-11-02T09:00:00Z", q=5.0, passed=None, total=None,
             uid=None):
         return {"id": i, "uid": uid or f"web:{i}", "key": key, "ts": ts, "q": q,
                 "passed": passed, "total": total}
 
     def test_pull_inserts_dedupes_advances_the_cursor_and_replays(self):
-        db = kata.connect()
-        dev = kata.device_id(db)
-        kata.record(db, "kata:a", 5, 15, 15)  # a local attempt that was already pushed
+        db = problems.connect()
+        dev = problems.device_id(db)
+        problems.record(db, "problem:a", 5, 15, 15)  # a local attempt that was already pushed
         mine = db.execute("SELECT uid, ts FROM ex_attempts").fetchone()
         db.execute("UPDATE ex_attempts SET pushed = 1")
         rows = [
@@ -213,31 +236,32 @@ class PullTest(Base):
         ]
         t = Fake({"attempts": rows, "next": 12})
         new, touched = sync.pull(db, t)
-        self.assertEqual((new, touched), (2, {"bug:b", "kata:a"}))
+        self.assertEqual((new, touched), (2, {"bug:b", "problem:a"}))
         self.assertEqual(t.calls[0][1], "/api/sync/pull?after=0&limit=500")
         self.assertEqual(sync.get_state(db, "pull_cursor"), "12")
         got = db.execute("SELECT key, ts, passed, total, q, pushed FROM ex_attempts "
                          "WHERE uid LIKE 'web:%' ORDER BY id").fetchall()
         self.assertEqual([tuple(r) for r in got], [
             ("bug:b", "2000-01-01T00:00:00+00:00", 4, 5, 4.2, 1),  # counts derived from q
-            ("kata:a", "2026-11-03T09:00:00+00:00", 12, 15, 3.0, 1),
+            ("problem:a", "2026-11-03T09:00:00+00:00", 12, 15, 3.0, 1),
         ])
         self.assertEqual(sync.push(db, Fake())["pushed"], 0)  # pulled rows are never pushed back
-        self.assertEqual(dev, kata.device_id(db))
+        self.assertEqual(dev, problems.device_id(db))
 
     def test_full_sync_rebuilds_state_and_resumes_from_the_cursor(self):
-        db = kata.connect()
+        db = problems.connect()
         pulled = {"attempts": [self.web(5, ts="2026-11-01T09:00:00Z", q=1.0)], "next": 5}
         stats = sync.sync(db, Fake(pulled))  # nothing to push, so the only call is the pull
         self.assertEqual(stats, {"pushed": 0, "duplicates": 0, "skipped": [], "pulled": 1})
-        state = db.execute("SELECT reps, interval FROM ex_state WHERE key = 'kata:a'").fetchone()
+        state = db.execute("SELECT reps, interval FROM ex_state "
+                           "WHERE key = 'problem:a'").fetchone()
         self.assertEqual((state["reps"], state["interval"]), (0, 1.0))  # a failing attempt
         t = Fake({"attempts": [], "next": 5})
         sync.sync(db, t)
         self.assertEqual(t.calls[0][1], "/api/sync/pull?after=5&limit=500")
 
     def test_a_cursor_that_does_not_advance_is_an_error(self):
-        db = kata.connect()
+        db = problems.connect()
         with self.assertRaises(sync.SyncError):
             sync.pull(db, Fake({"attempts": [self.web(1)], "next": 0}))
 
@@ -263,18 +287,19 @@ class PullTest(Base):
         dbs = []
         for d in (dev_a, dev_b):
             with mock.patch.object(drill, "HOME", d):
-                dbs.append(kata.connect())
+                dbs.append(problems.connect())
         a, b = dbs
-        self.insert(a, "kata:k", "2026-11-01T09:00:00+00:00", 5, 1, 1, f"{kata.device_id(a)}:1")
-        self.insert(b, "kata:k", "2026-11-03T09:00:00+00:00", 3, 4, 5, f"{kata.device_id(b)}:1")
-        self.insert(a, "kata:k", "2026-11-05T09:00:00+00:00", 5, 1, 1, f"{kata.device_id(a)}:2")
+        da, db_id = problems.device_id(a), problems.device_id(b)
+        self.insert(a, "problem:k", "2026-11-01T09:00:00+00:00", 5, 1, 1, f"{da}:1")
+        self.insert(b, "problem:k", "2026-11-03T09:00:00+00:00", 3, 4, 5, f"{db_id}:1")
+        self.insert(a, "problem:k", "2026-11-05T09:00:00+00:00", 5, 1, 1, f"{da}:2")
         sync.sync(a, transport_for(a))
         sync.sync(b, transport_for(b))
         sync.sync(a, transport_for(a))  # a picks up b's attempt
         sync.sync(b, transport_for(b))
         def read(db):
             row = db.execute("SELECT ease, interval, reps, due FROM ex_state "
-                             "WHERE key = 'kata:k'").fetchone()
+                             "WHERE key = 'problem:k'").fetchone()
             return tuple(row)
 
         self.assertEqual(read(a), read(b))
@@ -363,7 +388,7 @@ class HttpTest(unittest.TestCase):
 
 class AutosyncTest(Base):
     def run_autosync(self, env, transport=None):
-        db = kata.connect()
+        db = problems.connect()
         out = io.StringIO()
         patches = [mock.patch.dict(os.environ, env)]
         if transport:
@@ -371,7 +396,7 @@ class AutosyncTest(Base):
         with contextlib.redirect_stdout(out), contextlib.ExitStack() as stack:
             for p in patches:
                 stack.enter_context(p)
-            kata.autosync(db)
+            problems.autosync(db)
         return out.getvalue()
 
     def test_no_url_means_silence(self):
@@ -394,11 +419,11 @@ def fixture_payload(root: Path) -> dict:
     """Deterministic events, deliberately out of time order, with their replayed schedules."""
     with mock.patch.object(drill, "HOME", root / "fixture-home"), \
             mock.patch.object(drill, "CARDS", root / "cards"):
-        db = kata.connect()
+        db = problems.connect()
         events = [  # (key, ts, q, passed, total) in insertion order
-            ("kata:fixture-a", "2026-11-01T09:00:00+00:00", 1, 3, 15),
-            ("kata:fixture-a", "2026-11-05T09:00:00+00:00", 3, 12, 15),
-            ("kata:fixture-a", "2026-11-02T09:00:00+00:00", 5, 15, 15),
+            ("problem:fixture-a", "2026-11-01T09:00:00+00:00", 1, 3, 15),
+            ("problem:fixture-a", "2026-11-05T09:00:00+00:00", 3, 12, 15),
+            ("problem:fixture-a", "2026-11-02T09:00:00+00:00", 5, 15, 15),
             ("bug:fixture-b", "2026-11-03T10:00:00+00:00", 4.2, 4, 5),
             ("bug:fixture-b", "2026-11-03T10:00:00+00:00", 2.5, 2, 5),  # same second: id order
             ("bug:fixture-b", "2026-11-09T10:00:00+00:00", 5.0, 5, 5),
@@ -409,7 +434,7 @@ def fixture_payload(root: Path) -> dict:
         db.commit()
         rows = db.execute("SELECT * FROM ex_attempts ORDER BY id").fetchall()
         expected = {}
-        for key in ("kata:fixture-a", "bug:fixture-b"):
+        for key in ("problem:fixture-a", "bug:fixture-b"):
             sync.replay_local(db, key)
             expected[key] = dict(db.execute("SELECT ease, interval, reps, due FROM ex_state "
                                             "WHERE key = ?", (key,)).fetchone())

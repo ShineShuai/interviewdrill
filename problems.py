@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""kata: verified coding exercises (programs read stdin and write stdout; any language).
+"""problems: verified coding problems with hidden tests (programs read stdin, write stdout).
 
-  kata.py gen [-t TOPIC] [-d 1-5] [-n 1]   LLM proposes a kata; it must pass verification
-  kata.py review                            approve / reject verified candidates
-  kata.py next [-t TOPIC]                   show the next due (or a new) kata
-  kata.py solve ID [--reveal] -- CMD ...    run CMD on the tests, e.g. -- ./a.out
-  kata.py status
+  problems.py gen [-t TOPIC] [-d 1-5] [-n 1]   LLM proposes a problem; it must pass verification
+  problems.py review                            approve / reject verified candidates
+  problems.py next [-t TOPIC]                   show the next due (or a new) problem
+  problems.py solve ID [--reveal] -- CMD ...    run CMD on the tests, e.g. -- ./a.out
+  problems.py status
 
 Verification: reference == brute force on random small inputs, the statement examples match
 the reference, the reference fits the time limit on large inputs, and the known-wrong
-solutions fail the tests. Env: ANTHROPIC_API_KEY, DRILL_GEN_MODEL, DRILL_KATAS, DRILL_SANDBOX.
+solutions fail the tests. Env: ANTHROPIC_API_KEY, DRILL_GEN_MODEL, DRILL_PROBLEMS, DRILL_SANDBOX.
 """
 import argparse
 import json
@@ -27,8 +27,8 @@ import drill
 import gen
 import sandbox
 
-KATAS = Path(os.environ.get("DRILL_KATAS", Path(__file__).parent / "katas"))
-PENDING = KATAS / "_pending"
+PROBLEMS = Path(os.environ.get("DRILL_PROBLEMS", Path(__file__).parent / "problems"))
+PENDING = PROBLEMS / "_pending"
 N_SMALL, N_LARGE, LARGE = 40, 2, 50_000  # random small tests, large tests, large size
 GROUPS = ("ex", "small", "large")
 
@@ -57,7 +57,7 @@ Standard library only. Use the seed for all randomness."""
 
 STR = {"type": "string"}
 PROPOSE_TOOL = {
-    "name": "kata",
+    "name": "problem",
     "description": "Exercise: statement, reference, brute force, generator, wrong solutions.",
     "input_schema": {
         "type": "object",
@@ -79,9 +79,9 @@ def norm_out(s: str) -> str:
 
 
 def unique_slug(title: str) -> str:
-    base = gen.slug(title)[:40] or "kata"
+    base = gen.slug(title)[:40] or "problem"
     name, n = base, 2
-    while (KATAS / name).exists() or (PENDING / name).exists():
+    while (PROBLEMS / name).exists() or (PENDING / name).exists():
         name, n = f"{base}-{n}", n + 1
     return name
 
@@ -102,7 +102,7 @@ def _spec_error(spec: object) -> str | None:
 
 def verify(spec: dict, work: Path, small: int = N_SMALL, large: int = N_LARGE,
            big: int = LARGE) -> tuple[dict | None, str]:
-    """Write the kata into `work` and run every check: (report, "") or (None, reason)."""
+    """Write the problem into `work` and run every check: (report, "") or (None, reason)."""
     if err := _spec_error(spec):
         return None, f"malformed spec: {err}"
     work.mkdir(parents=True, exist_ok=True)
@@ -172,11 +172,11 @@ def propose(topic, difficulty, avoid, prev=None, feedback=None) -> dict:
         prompt += "Do not repeat these titles: " + "; ".join(avoid) + "\n"
     if feedback:
         prompt += (f"\nYour previous attempt failed verification: {feedback}\n"
-                   f"Previous attempt:\n{json.dumps(prev)}\nReturn a corrected, complete kata.")
+                   f"Previous attempt:\n{json.dumps(prev)}\nReturn a corrected, complete problem.")
     return gen.call_tool(PROPOSE_SYSTEM, PROPOSE_TOOL, prompt, max_tokens=6000)
 
 
-def make_kata(topic, difficulty, avoid, propose_fn=propose, repairs=2, **vkw):
+def make_problem(topic, difficulty, avoid, propose_fn=propose, repairs=2, **vkw):
     """Propose, verify, and feed failures back for repair. Returns (pending_dir | None, reason)."""
     prev, feedback, reason = None, None, ""
     for _ in range(repairs + 1):
@@ -196,7 +196,7 @@ def make_kata(topic, difficulty, avoid, propose_fn=propose, repairs=2, **vkw):
                     "approach": str(spec.get("approach") or "").strip(),
                     "time_limit": report["time_limit"],
                     "provenance": {"model": gen.MODEL, "verified": report}}
-            (work / "kata.json").write_text(json.dumps(meta, indent=2))
+            (work / "problem.json").write_text(json.dumps(meta, indent=2))
             return work, ""
         shutil.rmtree(work, ignore_errors=True)
         prev, feedback = spec, reason
@@ -220,6 +220,11 @@ def migrate(db) -> None:
     for name, ddl in (("q", "REAL"), ("uid", "TEXT"), ("pushed", "INTEGER DEFAULT 0")):
         if name not in cols:
             db.execute(f"ALTER TABLE ex_attempts ADD COLUMN {name} {ddl}")
+    # progress recorded before the rename kata -> problem
+    db.execute("UPDATE OR IGNORE ex_state SET key = 'problem:' || substr(key, 6) "
+               "WHERE key LIKE 'kata:%'")
+    db.execute("DELETE FROM ex_state WHERE key LIKE 'kata:%'")  # only if both ids existed
+    db.execute("UPDATE ex_attempts SET key = 'problem:' || substr(key, 6) WHERE key LIKE 'kata:%'")
     db.execute("CREATE UNIQUE INDEX IF NOT EXISTS ex_attempts_uid ON ex_attempts(uid)")
     # attempts from before sync were made on this device and have not been pushed
     db.execute("UPDATE ex_attempts SET uid = ? || ':' || id WHERE uid IS NULL", (device_id(db),))
@@ -275,13 +280,13 @@ def pick(db, kind: str, ids: list[str], rng=random) -> str | None:
 
 
 # --- practice ---
-def load_katas() -> dict[str, dict]:
-    files = sorted(KATAS.glob("*/kata.json"))
+def load_problems() -> dict[str, dict]:
+    files = sorted(PROBLEMS.glob("*/problem.json"))
     return {m["id"]: m for m in (json.loads(f.read_text()) for f in files)}
 
 
 def run_tests(kdir: Path, cmd: list[str]) -> list[dict]:
-    meta = json.loads((kdir / "kata.json").read_text())
+    meta = json.loads((kdir / "problem.json").read_text())
     group = lambda p: re.match(r"[a-z]+", p.stem).group()  # noqa: E731
     results = []
     for f in sorted((kdir / "tests").glob("*.in"), key=lambda p: (GROUPS.index(group(p)), p.stem)):
@@ -311,34 +316,35 @@ def summarize(results: list[dict], reveal: bool = False) -> tuple[int, int]:
     return sum(r["verdict"] == "OK" for r in results), len(results)
 
 
-def show_kata(m: dict) -> None:
+def show_problem(m: dict) -> None:
     print(f"\n{m['title']}  [{m['id']}, difficulty {m['difficulty']}, limit {m['time_limit']}s]\n")
     print(m["statement"])
     for i, ex in enumerate(m["examples"], 1):
         print(f"\nExample {i} input:\n{ex['input']}Output:\n{ex['output']}")
-    print(f"\nsolve: kata.py solve {m['id']} -- <command that reads stdin>")
+    print(f"\nsolve: problems.py solve {m['id']} -- <command that reads stdin>")
 
 
 def card_for(meta: dict, kdir: Path) -> dict:
-    """The kata as a web exercise: answered as an approach (or code), graded by an LLM."""
+    """The problem as a web exercise: answered as an approach (or code), graded by an LLM."""
     examples = "\n\n".join(
         f"Example {i}\nInput:\n{e['input'].rstrip()}\nOutput:\n{e['output'].rstrip()}"
         for i, e in enumerate(meta["examples"], 1))
-    question = (f"Kata: {meta['title']} - explain how you would solve it: algorithm, complexity, "
-                f"edge cases (code optional).\n\n{meta['statement']}\n\n{examples}\n\n"
+    question = (f"Problem: {meta['title']} - explain how you would solve it: algorithm, "
+                "complexity, edge cases (code optional)."
+                f"\n\n{meta['statement']}\n\n{examples}\n\n"
                 f"Time limit: {meta['time_limit']}s per test.")
     ref = [f"- Intended approach: {meta['approach']}"] if meta.get("approach") else []
     ref.append("- Verified reference solution (Python; agrees with a brute force on random "
                "tests):\n" + (kdir / "reference.py").read_text()[:3000])
     for i, path in enumerate(sorted(kdir.glob("wrong*.py")), 1):
         ref.append(f"- Known wrong approach {i} (fails the tests):\n{path.read_text()[:1500]}")
-    return {"id": f"kata:{meta['id']}", "topic": "katas", "question": question,
+    return {"id": f"problem:{meta['id']}", "topic": "problems", "question": question,
             "ref": "\n".join(ref)}
 
 
 def tests_payload(kdir: Path) -> dict:
-    """Tests of one kata for the browser runner (web/public/katas/<id>.json)."""
-    meta = json.loads((kdir / "kata.json").read_text())
+    """Tests of one problem for the browser runner (web/public/problems/<id>.json)."""
+    meta = json.loads((kdir / "problem.json").read_text())
     group = lambda p: re.match(r"[a-z]+", p.stem).group()  # noqa: E731
     files = sorted((kdir / "tests").glob("*.in"), key=lambda p: (GROUPS.index(group(p)), p.stem))
     return {"id": meta["id"], "time_limit": meta["time_limit"],
@@ -348,17 +354,17 @@ def tests_payload(kdir: Path) -> dict:
 
 def review() -> Counter:
     done: Counter = Counter()
-    for work in sorted(p.parent for p in PENDING.glob("*/kata.json")):
-        meta = json.loads((work / "kata.json").read_text())
+    for work in sorted(p.parent for p in PENDING.glob("*/problem.json")):
+        meta = json.loads((work / "problem.json").read_text())
         v = meta["provenance"]["verified"]
         while True:
-            show_kata({**meta, "id": work.name})
+            show_problem({**meta, "id": work.name})
             print(f"\nverified: reference == brute force on {v['small_agree']} random tests; "
                   f"reference {v['large_ref_secs']}s on large input; wrong solutions killed "
                   f"{v['mutants_killed']}/{v['mutants']}\nfiles: {work}")
             key = input("[a]pprove [r]eject [s]kip [q]uit > ").strip().lower()[:1]
             if key == "a":
-                shutil.move(work, KATAS / (work.name if not (KATAS / work.name).exists()
+                shutil.move(work, PROBLEMS / (work.name if not (PROBLEMS / work.name).exists()
                                            else unique_slug(work.name)))
                 done["approved"] += 1
                 break
@@ -376,16 +382,16 @@ def review() -> Counter:
 
 # --- CLI ---
 def cmd_gen(a):
-    avoid = [m["title"] for m in load_katas().values()]
-    avoid += [json.loads(p.read_text())["title"] for p in PENDING.glob("*/kata.json")]
+    avoid = [m["title"] for m in load_problems().values()]
+    avoid += [json.loads(p.read_text())["title"] for p in PENDING.glob("*/problem.json")]
     for _ in range(a.n):
-        work, reason = make_kata(a.topic, a.difficulty, avoid)
+        work, reason = make_problem(a.topic, a.difficulty, avoid)
         if work:
-            avoid.append(json.loads((work / "kata.json").read_text())["title"])
+            avoid.append(json.loads((work / "problem.json").read_text())["title"])
             print(f"verified: {work}")
         else:
             print(f"rejected: {reason}")
-    print("next: kata.py review")
+    print("next: problems.py review")
 
 
 def cmd_review(a):
@@ -393,23 +399,23 @@ def cmd_review(a):
 
 
 def cmd_next(a):
-    katas = {k: m for k, m in load_katas().items() if not a.topic or m["topic"] == a.topic}
-    kid = pick(connect(), "kata", sorted(katas))
+    problems = {k: m for k, m in load_problems().items() if not a.topic or m["topic"] == a.topic}
+    kid = pick(connect(), "problem", sorted(problems))
     if kid:
-        show_kata(katas[kid])
+        show_problem(problems[kid])
     else:
-        print("nothing due" if katas else "no katas; run: kata.py gen")
+        print("nothing due" if problems else "no problems; run: problems.py gen")
 
 
 def cmd_solve(a):
     cmd = a.cmd
-    kdir = KATAS / a.id
-    if not cmd or not (kdir / "kata.json").exists():
-        raise SystemExit("usage: kata.py solve ID [--reveal] -- CMD ... (ID must be approved)")
+    kdir = PROBLEMS / a.id
+    if not cmd or not (kdir / "problem.json").exists():
+        raise SystemExit("usage: problems.py solve ID [--reveal] -- CMD ... (ID must be approved)")
     passed, total = summarize(run_tests(kdir, cmd), a.reveal)
     q = 5 if passed == total else 3 if passed >= 0.8 * total else 1
     db = connect()
-    days = record(db, f"kata:{a.id}", q, passed, total)
+    days = record(db, f"problem:{a.id}", q, passed, total)
     print(f"{passed}/{total} passed; next review in {days:.0f}d")
     autosync(db)
 
@@ -417,22 +423,22 @@ def cmd_solve(a):
 def cmd_status(a):
     db = connect()
     row = db.execute("SELECT COUNT(*), COALESCE(SUM(passed = total), 0) FROM ex_attempts "
-                     "WHERE key LIKE 'kata:%'").fetchone()
-    pending = len(list(PENDING.glob("*/kata.json")))
-    print(f"katas: {len(load_katas())} approved, {pending} pending; "
+                     "WHERE key LIKE 'problem:%'").fetchone()
+    pending = len(list(PENDING.glob("*/problem.json")))
+    print(f"problems: {len(load_problems())} approved, {pending} pending; "
           f"attempts {row[0]} ({row[1]} fully passed)")
 
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = p.add_subparsers(dest="cmd", required=True)
-    s = sub.add_parser("gen", help="generate and verify katas")
+    s = sub.add_parser("gen", help="generate and verify problems")
     s.add_argument("-t", "--topic", default="arrays and strings")
     s.add_argument("-d", "--difficulty", type=int, default=2)
     s.add_argument("-n", type=int, default=1)
     s.set_defaults(fn=cmd_gen)
     sub.add_parser("review", help="approve verified candidates").set_defaults(fn=cmd_review)
-    s = sub.add_parser("next", help="show the next kata")
+    s = sub.add_parser("next", help="show the next problem")
     s.add_argument("-t", "--topic")
     s.set_defaults(fn=cmd_next)
     s = sub.add_parser("solve", help="run your program on the tests")

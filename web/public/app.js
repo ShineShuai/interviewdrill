@@ -149,7 +149,7 @@ async function drill(topic, n) {
 function ask(card, label) {
   return new Promise((resolve) => {
     const t0 = performance.now();
-    // Exercises (bug:, kata:) have a one-line instruction followed by code or a statement.
+    // Exercises (bug:, problem:) have a one-line instruction followed by code or a statement.
     const [head, ...rest] = card.question.split("\n");
     const body = rest.join("\n").trim();
     const box = h("textarea", {
@@ -161,11 +161,11 @@ function ask(card, label) {
     const msg = h("p", { class: "err" });
     const mic = h("button", { onclick: () => toggleMic(mic, box, msg) }, "Record");
     const send = h("button", { class: "primary" }, "Submit");
-    const kata = card.id.startsWith("kata:");
+    const problem = card.id.startsWith("problem:");
     const panel = h("div", { class: "panel" });
     const reveal = h("input", { type: "checkbox" });
     const run = h("button", {}, "Run as Python");
-    run.addEventListener("click", () => runKata(card, box, panel, run, reveal.checked));
+    run.addEventListener("click", () => runProblem(card, box, panel, run, reveal.checked));
     const skip = h("button", { onclick: () => resolve(null) }, "Next");
     const submit = async () => {
       if (!box.value.trim()) return;
@@ -203,12 +203,12 @@ function ask(card, label) {
         mic,
       ),
       box,
-      kata
+      problem
         ? h("div", { class: "row" }, run, h("label", { class: "inline" }, reveal, "reveal"))
         : null,
       send,
-      kata ? skip : null,
-      kata ? panel : null,
+      problem ? skip : null,
+      problem ? panel : null,
       msg,
     );
     box.focus();
@@ -217,15 +217,17 @@ function ask(card, label) {
 
 const detailText = (d) => `input:\n${d.input}\nexpected: ${d.expected}\ngot: ${d.got}`;
 
-// Katas: paste a Python solution (stdin -> stdout) and run the verified tests in the browser.
-async function runKata(card, box, panel, btn, reveal) {
+// Problems: paste a Python solution (stdin -> stdout) and run the verified tests in the browser.
+async function runProblem(card, box, panel, btn, reveal) {
   if (!box.value.trim()) return;
   btn.disabled = true;
   const note = (text, cls = "dim") => panel.replaceChildren(h("p", { class: cls }, text));
   try {
     note("Loading tests and the Python runtime (first run downloads about 10 MB)…");
-    const res = await fetch(`/katas/${card.id.slice(5)}.json`);
-    if (!res.ok) throw new Error("no tests for this kata; run `npm run katas` and redeploy");
+    const res = await fetch(`/problems/${card.id.slice("problem:".length)}.json`);
+    if (!res.ok) {
+      throw new Error("no tests for this problem; run `npm run problems` and redeploy");
+    }
     const spec = await res.json();
     const { runTests, summarize } = await import("/runner-core.js");
     const { spawnWorker } = await import("/runner.js");
@@ -235,7 +237,7 @@ async function runKata(card, box, panel, btn, reveal) {
       onProgress: (i, n) => note(`Running test ${i}/${n}…`),
     });
     const s = summarize(results, reveal);
-    const saved = await api("/api/kata/result", {
+    const saved = await api("/api/problem/result", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

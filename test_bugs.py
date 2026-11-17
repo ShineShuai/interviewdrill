@@ -12,7 +12,7 @@ from unittest import mock
 import bugs
 import drill
 import export_cards
-import kata
+import problems
 
 HAVE_CXX = shutil.which(bugs.CXX) is not None
 REAL_GO = shutil.which(bugs.GO) is not None  # evaluated before any test patches PATH
@@ -196,7 +196,8 @@ class PipelineTest(unittest.TestCase):
         for target, name, value in [
             (bugs, "BUGS", root / "bugs"), (bugs, "PENDING", root / "bugs" / "_pending"),
             (drill, "HOME", root / "home"), (drill, "CARDS", root / "cards"),
-            (kata, "KATAS", root / "katas"), (kata, "PENDING", root / "katas" / "_pending"),
+            (problems, "PROBLEMS", root / "problems"),
+            (problems, "PENDING", root / "problems" / "_pending"),
         ]:
             patcher = mock.patch.object(target, name, value)
             patcher.start()
@@ -239,12 +240,12 @@ class PipelineTest(unittest.TestCase):
         out = io.StringIO()
         with mock.patch.object(drill, "read_answer", return_value="push_back reallocates"), \
                 mock.patch.object(drill, "judge", judge), contextlib.redirect_stdout(out):
-            self.assertTrue(bugs.practice(kata.connect()))
+            self.assertTrue(bugs.practice(problems.connect()))
         self.assertIn("heap-use-after-free", seen["card"]["ref"])
         self.assertIn("-    int* first", seen["card"]["ref"])
         self.assertIn("v.push_back(4);", seen["card"]["question"])
         self.assertIn("ground truth", out.getvalue())
-        row = kata.connect().execute("SELECT key FROM ex_attempts").fetchone()
+        row = problems.connect().execute("SELECT key FROM ex_attempts").fetchone()
         self.assertEqual(row[0], f"bug:{meta['id']}")
 
     def test_gives_up_and_cleans_up(self):
@@ -493,7 +494,8 @@ class FakeGoPipelineTest(FakeGoBase):
         for target, name, value in [
             (bugs, "BUGS", self.root / "bugs"), (bugs, "PENDING", self.root / "bugs" / "_pending"),
             (drill, "HOME", self.root / "home"), (drill, "CARDS", self.root / "cards"),
-            (kata, "KATAS", self.root / "katas"), (kata, "PENDING", self.root / "katas" / "_p"),
+            (problems, "PROBLEMS", self.root / "problems"),
+            (problems, "PENDING", self.root / "problems" / "_p"),
         ]:
             patcher = mock.patch.object(target, name, value)
             patcher.start()

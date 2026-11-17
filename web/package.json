@@ -8,11 +8,13 @@
     "typecheck": "tsc",
     "test": "node --test test/*.test.ts test/*.test.js",
     "vendor": "node scripts/vendor-pyodide.mjs",
-    "katas": "python3 ../export_cards.py --tests public/katas",
-    "predev": "npm run vendor && npm run katas",
-    "predeploy": "npm run vendor && npm run katas",
+    "problems": "python3 ../export_cards.py --tests public/problems",
+    "predev": "npm run vendor && npm run problems",
+    "predeploy": "npm run vendor && npm run problems",
     "db:init": "wrangler d1 execute drill --remote --file schema.sql",
     "db:init:local": "wrangler d1 execute drill --local --file schema.sql",
+    "db:migrate-problems":
+      "wrangler d1 execute drill --remote --file migrations/0003_problems.sql",
     "db:migrate-sync": "wrangler d1 execute drill --remote --file migrations/0002_sync.sql",
     "cards": "node scripts/sync-cards.ts --remote",
     "cards:local": "node scripts/sync-cards.ts --local"
