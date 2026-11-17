@@ -22,6 +22,10 @@ npm run db:init:local && npm run cards:local && npm run dev
 
 ## Test
 `npm test` (Node >= 22.18, no install needed) · `npm run typecheck` (after `npm i`).
+Browser UI: `python3 -m unittest test_web_ui` from the repo root (needs `pip install playwright`
+and `playwright install chromium`; skipped otherwise). It drives real Chromium against
+`test/ui-server.ts`: the real Worker, security headers and cards, with Workers AI and Pyodide
+stubbed.
 
 ## Notes
 - Daily cap (`DAILY_CAP`, default 200) counts LLM + STT calls per user per UTC day.
