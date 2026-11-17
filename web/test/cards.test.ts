@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 import { checkCards, parseCards, syncSql } from "../src/cards.ts";
+import { checklist } from "../src/checklist.ts";
 
 test("parses id | question headings and bodies", () => {
   const text = "# title\n## a | Why | pipe?\n- x\n- y\n\n## b | Q2\n- z\n";
@@ -24,6 +25,11 @@ test("shared cards/ directory is well formed", () => {
   assert.ok(cards.length >= 19);
   assert.equal(new Set(cards.map((c) => c.id)).size, cards.length);
   assert.ok(cards.every((c) => c.id && c.question && c.ref));
+  assert.ok(cards.filter((c) => c.topic === "video").length >= 20);
+  for (const c of cards) {
+    const n = checklist(c.id, c.ref).length;
+    assert.ok(n >= 3 && n <= 6, `${c.id}: ${n} checklist points`);
+  }
 });
 
 const card = (id: string, extra: object = {}) => ({

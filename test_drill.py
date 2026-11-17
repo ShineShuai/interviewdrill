@@ -150,6 +150,13 @@ class CardsTest(unittest.TestCase):
         self.assertEqual(len(ids), len(set(ids)))
         self.assertTrue(all(c["question"] and c["ref"] for c in cards))
 
+    def test_seed_cards_have_a_usable_checklist(self):
+        cards = drill.load_cards()
+        for c in cards:
+            bullets = [ln for ln in c["ref"].splitlines() if ln.startswith("- ")]
+            self.assertTrue(3 <= len(bullets) <= 6, c["id"])
+        self.assertGreaterEqual(sum(c["topic"] == "video" for c in cards), 20)
+
     def test_provenance_comment_is_not_reference(self):
         with tempfile.TemporaryDirectory() as d:
             (Path(d) / "t.md").write_text("## t-a | Q?\n<!-- src: x -->\n- p\n")
