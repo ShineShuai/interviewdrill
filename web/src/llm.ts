@@ -56,26 +56,37 @@ export function extractJson(text: string): Record<string, unknown> {
 const objectFrom = (v: unknown): Record<string, unknown> =>
   typeof v === "string" ? extractJson(v) : extractJson(JSON.stringify(v ?? null));
 
+/** Same request without JSON mode: the schema goes into the prompt, extractJson does the rest. */
+const plainRequest = (req: JsonRequest) => [
+  { role: "system", content: `${req.system}\nReply with only a JSON object matching this JSON ` +
+      `Schema, no prose and no code fence:\n${JSON.stringify(req.tool.input_schema)}` },
+  { role: "user", content: req.prompt },
+];
+// Workers AI says "JSON Mode couldn't be met" when a model cannot follow the schema.
+const JSON_MODE_ERROR = /json|schema|response.?format/i;
+
 async function viaWorkersAi(env: Env, req: JsonRequest): Promise<Record<string, unknown>> {
   const models = (env.LLM_MODEL ?? DEFAULT_MODELS).split(",").map((m) => m.trim()).filter(Boolean);
+  const ai = env.AI as unknown as AiRunner;
+  const base = { max_tokens: req.maxTokens, temperature: 0 };
   let failure: unknown;
   for (const model of models) {
-    let out: unknown;
-    try {
-      out = await (env.AI as unknown as AiRunner).run(model, {
-        messages: [
-          { role: "system", content: req.system },
-          { role: "user", content: req.prompt },
-        ],
-        response_format: { type: "json_schema", json_schema: req.tool.input_schema },
-        max_tokens: req.maxTokens,
-        temperature: 0,
-      });
-    } catch (e) {
-      failure = e; // not on this plan, over the daily allowance, or the model is down
-      continue;
+    let input: Record<string, unknown> = {
+      messages: [{ role: "system", content: req.system }, { role: "user", content: req.prompt }],
+      response_format: { type: "json_schema", json_schema: req.tool.input_schema },
+      ...base,
+    };
+    for (let plain = false; ; plain = true) {
+      try {
+        const out = await ai.run(model, input);
+        return objectFrom((out as { response?: unknown } | null)?.response);
+      } catch (e) {
+        if (e instanceof SyntaxError) throw e; // the model answered, but not with JSON
+        failure = e; // not on this plan, allowance used up, JSON mode refused, or model down
+        if (plain || !JSON_MODE_ERROR.test(String((e as Error)?.message ?? e))) break;
+        input = { messages: plainRequest(req), ...base }; // same model once more, no JSON mode
+      }
     }
-    return objectFrom((out as { response?: unknown } | null)?.response);
   }
   console.error("workers ai failed", failure);
   throw new HttpError(502, "grader unavailable");

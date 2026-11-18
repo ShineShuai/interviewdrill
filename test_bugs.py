@@ -158,6 +158,8 @@ class VerifyTest(unittest.TestCase):
         self.assertNotIn(str(self.work), report["excerpt"])
         self.assertNotRegex(report["excerpt"], r"==\d+==")
         self.assertIn("heap-use-after-free", report["excerpt"])
+        self.assertNotIn("BuildId", report["excerpt"])  # nor frames of libc and program start
+        self.assertNotRegex(report["excerpt"], r"libc|_start")
 
     def reject(self, category, buggy, fixed, needle):
         report, reason = bugs.verify(spec(category, buggy, fixed), self.work)

@@ -1,8 +1,8 @@
 """Browser tests for the web app: real Chromium (Playwright) against web/test/ui-server.ts.
 
 The server runs the real Worker on an in-memory D1 with the real cards and the real security
-headers; only Workers AI and Pyodide are stand-ins. Skipped when Playwright, Chromium or
-Node 22+ is not available.
+headers; Workers AI is a stand-in, and so is Pyodide except in RealPyodideTest (needs
+`npm install` in web/). Skipped when Playwright, Chromium or Node 22+ is not available.
 """
 import contextlib
 import os
@@ -383,6 +383,89 @@ class GraderDownTest(UiCase):
         self.problems.clear()  # the 502 is logged as a console error by the browser
         p.click("text=Grade myself")
         expect(p.locator("h2")).to_have_text("Check yourself")
+
+
+class IconsTest(UiCase):
+    """The PNG icons iOS and Android need are built from icon.svg (`npm run icons`)."""
+
+    @classmethod
+    def setUpClass(cls):
+        if not (WEB / "node_modules" / "@resvg").exists():
+            raise unittest.SkipTest("run `npm install` in web/ for the icon test")
+        subprocess.run(["node", "scripts/make-icons.mjs"], cwd=WEB, check=True, capture_output=True)
+
+    def test_home_screen_icons_are_served_as_png(self):
+        p = self.page
+        href = p.locator('link[rel="apple-touch-icon"]').get_attribute("href")
+        manifest = p.request.get(self.base + "/manifest.webmanifest").json()
+        pngs = [i for i in manifest["icons"] if i["type"] == "image/png"]
+        self.assertEqual({i["purpose"] for i in pngs}, {"any", "maskable"})
+        self.assertEqual({i["sizes"] for i in pngs}, {"192x192", "512x512"})
+        for src in [href, *(i["src"] for i in pngs)]:
+            r = p.request.get(self.base + src)
+            self.assertEqual((src, r.status), (src, 200))
+            self.assertEqual(r.headers["content-type"], "image/png")
+            self.assertEqual(r.body()[1:4], b"PNG")
+
+
+class RealPyodideTest(UiCase):
+    """The real Pyodide runtime, vendored by `npm run vendor`, under the real CSP."""
+
+    server_env = {"UI_PYODIDE": "real"}
+    SLOW = 60_000
+
+    @classmethod
+    def setUpClass(cls):
+        if not (WEB / "node_modules" / "pyodide").exists():
+            raise unittest.SkipTest("run `npm install` in web/ for the real Pyodide tests")
+        subprocess.run(["node", "scripts/vendor-pyodide.mjs"], cwd=WEB, check=True,
+                       capture_output=True)
+
+    def run_python(self, code):
+        self.page.fill("textarea", code)
+        self.page.click("text=Run as Python")
+
+    def verdict(self, code, text):
+        self.run_python(code)
+        expect(self.page.locator(".panel")).to_contain_text(text, timeout=self.SLOW)
+
+    def test_runs_correct_wrong_and_crashing_solutions(self):
+        self.start("problems")
+        self.run_python(SOLUTION)
+        expect(self.page.locator(".panel h3")).to_have_text("2/2 passed", timeout=self.SLOW)
+        self.verdict("print(0)", "first failure: ex1 WA")
+        self.verdict("print(1 / 0)", "ZeroDivisionError")
+        self.no_overflow()
+
+    def test_stdlib_and_deep_recursion(self):
+        self.start("problems")
+        self.run_python(
+            "import sys, heapq, bisect, collections, itertools, functools, re\n"
+            "sys.setrecursionlimit(20000)\n"
+            "def depth(n): return 0 if n == 0 else 1 + depth(n - 1)\n"
+            "a, b = map(int, input().split())\n"
+            "print(a + b + depth(5000) - 5000)")
+        expect(self.page.locator(".panel h3")).to_have_text("2/2 passed", timeout=self.SLOW)
+
+    def test_no_network_even_through_the_prototype_chain(self):
+        # a blocked call must end in a runtime error (RE); an open one would print and give WA.
+        # Pyodide sometimes reports the blocked call as "SystemError" instead of the Error text.
+        self.start("problems")
+        self.verdict("import js\nprint(js.fetch('/api/export'))", "first failure: ex1 RE")
+        self.verdict("import js\nf = js.Object.getPrototypeOf(js.self).fetch\n"
+                     "print(f.call(js.self, '/api/export'))", "first failure: ex1 RE")
+        expect(self.page.locator(".panel h3")).to_have_text("0/2 passed")
+
+    def test_eval_is_refused_in_the_real_runtime(self):
+        self.start("problems")
+        self.verdict("import js\njs.eval('1')", "unsafe-eval")
+        self.problems.clear()  # the blocked eval is logged as a console error by the browser
+
+    def test_endless_loop_is_a_tle_and_the_runner_recovers(self):
+        self.start("problems")
+        self.verdict("while True: pass", "first failure: ex1 TLE")
+        expect(self.page.locator(".panel h3")).to_have_text("0/2 passed")
+        self.verdict(SOLUTION, "2/2 passed")
 
 
 if __name__ == "__main__":

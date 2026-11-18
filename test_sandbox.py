@@ -26,6 +26,15 @@ class SandboxTest(unittest.TestCase):
         self.assertFalse(r.ok)
         self.assertLessEqual(len(r.out), sandbox.MAX_OUT)
 
+    def test_file_size_cap_applies_to_runs_but_not_to_builds(self):
+        write = "import sys\nopen(sys.argv[1], 'wb').write(bytes(6 << 20))"
+        with tempfile.TemporaryDirectory() as d:
+            big = str(Path(d, "big"))
+            self.assertFalse(sandbox.run([sys.executable, "-c", write, big]).ok)
+            r = sandbox.run([sys.executable, "-c", write, big], fsize=sandbox.BUILD_FSIZE)
+            self.assertTrue(r.ok, r.err)
+            self.assertEqual(Path(big).stat().st_size, 6 << 20)
+
     @unittest.skipUnless(sys.platform == "linux", "RLIMIT_AS is Linux-only")
     def test_memory_limit(self):
         r = sandbox.run([sys.executable, "-c", "x = bytearray(1 << 30)"], mem_mb=200)

@@ -31,6 +31,8 @@ class FakeWorker {
     assert.equal(url, "/py/worker.js");
     const ctx = { performance, JSON, String, Error };
     ctx.self = ctx;
+    ctx.XMLHttpRequest = class {};
+    ctx.WebSocket = class {};
     ctx.importScripts = () => {};
     ctx.fetch = async (u) => {
       assert.equal(u, "/py/harness.py");
@@ -88,6 +90,16 @@ test("the network is blocked before any user code can run", async () => {
   assert.throws(() => ctx.importScripts("/x.js"), /network is disabled/);
   assert.throws(() => new ctx.XMLHttpRequest());
   assert.throws(() => new ctx.WebSocket("wss://x"));
+  w.kill();
+});
+
+test("the blocked network functions cannot be put back", async () => {
+  // the prototype-chain escape (Object.getPrototypeOf(self).fetch) is covered in test_web_ui.py:
+  // a vm global has no browser-like prototype chain
+  const w = await spawnWorker();
+  const { ctx } = workers.at(-1);
+  assert.throws(() => Object.defineProperty(ctx, "fetch", { value: () => {} }), TypeError);
+  assert.throws(() => ctx.fetch("/x"), /network is disabled/);
   w.kill();
 });
 

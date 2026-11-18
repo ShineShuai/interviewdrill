@@ -1,7 +1,9 @@
 // Local server for browser tests (test_web_ui.py): public/ served with the real _headers,
 // /api/* handled by the real Worker on an in-memory D1 seeded with the real cards, Workers AI
-// replaced by a stub. Pyodide is replaced by a stand-in that runs the program with CPython.
-// Usage: node test/ui-server.ts PORT   (env UI_LLM=none|workers-ai, UI_AI_FAIL=1)
+// replaced by a stub. Pyodide is replaced by a stand-in that runs the program with CPython,
+// unless UI_PYODIDE=real: then the runtime vendored into public/pyodide (`npm run vendor`)
+// is served and runs under the real CSP.
+// Usage: node test/ui-server.ts PORT   (env UI_LLM=none|workers-ai, UI_AI_FAIL=1, UI_PYODIDE=real)
 import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -17,9 +19,11 @@ const PUBLIC = here("../public");
 const CARDS = here("../../cards");
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css",
-  ".svg": "image/svg+xml", ".json": "application/json", ".py": "text/plain",
-  ".webmanifest": "application/manifest+json",
+  ".svg": "image/svg+xml", ".png": "image/png", ".json": "application/json", ".py": "text/plain",
+  ".webmanifest": "application/manifest+json", ".wasm": "application/wasm",
+  ".zip": "application/zip",
 };
+const REAL_PYODIDE = process.env.UI_PYODIDE === "real";
 
 /** Headers of the `/*` rule in public/_headers (the same file Cloudflare applies). */
 function sharedHeaders(): Record<string, string> {
@@ -136,7 +140,7 @@ createServer(async (req, res) => {
     const out = execFileSync("python3", ["-c", DRIVER, `${PUBLIC}/py/harness.py`],
       { input: await read(req) });
     send(200, out.toString().trim(), "application/json");
-  } else if (url.pathname === "/pyodide/pyodide.js") {
+  } else if (url.pathname === "/pyodide/pyodide.js" && !REAL_PYODIDE) {
     send(200, FAKE_PYODIDE, MIME[".js"]);
   } else if (url.pathname === "/__csp.html") {
     send(200, '<!doctype html><script src="/__csp.js"></script>', MIME[".html"]);

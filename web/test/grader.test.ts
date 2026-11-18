@@ -84,6 +84,28 @@ test("Workers AI: falls back to the next model when one is refused", async () =>
   assert.deepEqual(calls.map((c) => c.model), ["@cf/a/one"]); // custom list, first one works
 });
 
+test("Workers AI: a model that refuses JSON mode is asked again without it", async () => {
+  script = async (_model, input) => {
+    if (input.response_format) throw new Error("8001: JSON Mode couldn't be met");
+    return { response: `Sure:\n${JSON.stringify(GRADE)}` };
+  };
+  assert.deepEqual(await callJson(envOf(), REQ), GRADE);
+  assert.deepEqual(calls.map((c) => [c.model, "response_format" in c.input]), [
+    ["@cf/meta/llama-3.3-70b-instruct-fp8-fast", true],
+    ["@cf/meta/llama-3.3-70b-instruct-fp8-fast", false], // same model, schema in the prompt
+  ]);
+  const system = (calls[1].input.messages as { content: string }[])[0].content;
+  assert.match(system, /^be strict\nReply with only a JSON object/);
+  assert.match(system, /"type":"object"/);
+  assert.equal(calls[1].input.temperature, 0);
+  calls.length = 0;
+  script = async () => {
+    throw new Error("JSON Mode couldn't be met");
+  };
+  await assert.rejects(callJson(envOf(), REQ), { status: 502 });
+  assert.equal(calls.length, 4); // two models, two modes each; no endless retry
+});
+
 test("Workers AI: every model failing is a 502 the app can answer with self-grading", async () => {
   script = async () => {
     throw new Error("daily allowance used up");

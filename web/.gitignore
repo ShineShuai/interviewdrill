@@ -1,5 +1,6 @@
 node_modules/
 public/pyodide/
 public/problems/
+public/icons/
 .wrangler/
 .dev.vars

@@ -24,8 +24,14 @@ npm run db:init:local && npm run cards:local && npm run dev
 `npm test` (Node >= 22.18, no install needed) · `npm run typecheck` (after `npm i`).
 Browser UI: `python3 -m unittest test_web_ui` from the repo root (needs `pip install playwright`
 and `playwright install chromium`; skipped otherwise). It drives real Chromium against
-`test/ui-server.ts`: the real Worker, security headers and cards, with Workers AI and Pyodide
-stubbed.
+`test/ui-server.ts`: the real Worker, security headers and cards, with Workers AI stubbed and
+Pyodide stubbed except in `RealPyodideTest` (real runtime under the real CSP; needs `npm i`).
+
+## Home-screen icons
+iOS ignores SVG for the home-screen icon. `npm run icons` renders `public/icon.svg` into
+`public/icons/*.png` (180 px Apple touch icon, 192/512 px, maskable 512 px) with resvg; it runs
+before `npm run dev` and `npm run deploy`, and the folder is git-ignored. Keep the glyph as
+paths: text would depend on the fonts of the machine that builds.
 
 ## Notes
 - Daily cap (`DAILY_CAP`, default 200) counts LLM + STT calls per user per UTC day.
@@ -62,10 +68,11 @@ worker. The result (passed/total) updates the card's schedule like `problems.py 
 - `npm run problems` writes `public/problems/<id>.json` (tests) from `../problems`. Both run before
   `npm run dev` and `npm run deploy`, and both folders are git-ignored.
 - The tests are plain static files, so the solution can peek at them; fine for one user.
-- CSP allows `wasm-unsafe-eval` for the runtime. If the browser console reports a CSP error
-  about `eval`, the Pyodide build in use needs `'unsafe-eval'` as well; add it to `_headers`.
-- Not for code you do not trust: the runner blocks `fetch` and friends but is not a sandbox
-  against a hostile program.
+- Tested with Pyodide 0.27.8 in Chromium: `wasm-unsafe-eval` is enough, `eval` stays refused, so
+  the CSP needs no loosening.
+- Not for code you do not trust: the runner blocks `fetch` and friends (also through the
+  prototype chain) but is not a sandbox against a hostile program. Pyodide sometimes reports a
+  blocked call as `SystemError` instead of the error text; the run still fails.
 
 ## CLI sync (cards, problems and bugs)
 `sync.py` shares attempts between the CLI and the web app: attempts are append-only events,
@@ -87,9 +94,12 @@ Deploy the Worker before running a newer CLI: an older Worker rejects card attem
 ## Grading without an API key
 Answers are graded by `LLM` in `wrangler.toml`:
 - `workers-ai` (default): Cloudflare's own models through the `AI` binding. No key; the free
-  plan has a daily allowance (10,000 "neurons", shared with speech-to-text). `LLM_MODEL` lists
-  models to try in order; if the first is refused (some need the paid plan) or the allowance is
-  used up, the next one answers, and if all fail the app offers "Grade myself".
+  plan has a daily allowance (10,000 "neurons", shared with speech-to-text; Cloudflare's pricing
+  page, Nov 2026). Both default models are open to the free plan; only newer models (Kimi, GLM,
+  DeepSeek V4 ...) need paid billing. One graded answer costs roughly 60 neurons on the 70B model,
+  so expect about 150 per day. `LLM_MODEL` lists models to try in order; if the first is refused
+  or the allowance is used up, the next one answers, and if all fail the app offers "Grade
+  myself". A model that refuses JSON mode is asked once more with the schema in the prompt.
 - `anthropic`: `npx wrangler secret put ANTHROPIC_API_KEY`, set `LLM = "anthropic"`.
 - `none`: no model. "Grade myself" shows the reference and a checklist; you tick what your
   answer covered and the share is the score (it is stored and scheduled like any other grade).

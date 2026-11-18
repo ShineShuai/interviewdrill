@@ -87,6 +87,9 @@ CATEGORIES = {
     "go-closed-channel": Category("go", "", "closed channel"),
 }
 
+# stack frames below main (libc, dyld, program start) say nothing about the bug
+SYSTEM_FRAME = re.compile(r"\((?:/usr)?/lib\S*|\(dyld|__libc_start|in _start\b|in start\b")
+
 STR = {"type": "string"}
 PROPOSE_SYSTEM = {
     "cpp": """You write C++20 debugging exercises for interview practice. Each has exactly
@@ -196,7 +199,7 @@ def verify(spec: dict, work: Path, runs: int = RUNS) -> tuple[dict | None, str]:
         src = work / f"{name}.{lang.ext}"
         src.write_text(spec[name])
         c = sandbox.run(build_cmd(cat, src, work / name), timeout=300, mem_mb=0, cwd=work,
-                        env=build_env(cat))
+                        env=build_env(cat), fsize=sandbox.BUILD_FSIZE)
         if not c.ok:
             return None, f"{name} does not compile: {c.err[:400]}"
     env = {"ASAN_OPTIONS": f"detect_leaks={int(cat_name == 'memory-leak')}"}
@@ -226,6 +229,8 @@ def verify(spec: dict, work: Path, runs: int = RUNS) -> tuple[dict | None, str]:
     excerpt = reports[0].replace(str(work.resolve()), ".")
     excerpt = re.sub(r"==\d+==|\(pid=\d+\)", "", excerpt)
     excerpt = re.sub(r"0x[0-9a-f]{6,}", "0xADDR", excerpt)
+    excerpt = re.sub(r" \(BuildId: [0-9a-f]+\)", "", excerpt)
+    excerpt = "\n".join(ln for ln in excerpt.splitlines() if not SYSTEM_FRAME.search(ln))
     return {"category": cat_name, "tool": cat.tool, "runs": runs, "changed_lines": changed,
             "excerpt": "\n".join(excerpt.strip().splitlines()[:14]), "diff": "\n".join(diff)}, ""
 

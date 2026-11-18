@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 MAX_OUT = 1_000_000  # bytes of stdout/stderr kept
+BUILD_FSIZE = 1 << 30  # file-size cap for compiler runs: Go -race writes a ~20 MB runtime
 
 
 @dataclass
@@ -29,10 +30,10 @@ class Result:
         return self.rc == 0 and not self.timeout
 
 
-def _limits(cpu: int, mem_mb: int):
+def _limits(cpu: int, mem_mb: int, fsize: int):
     def apply() -> None:
         resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu))
-        resource.setrlimit(resource.RLIMIT_FSIZE, (4 * MAX_OUT, 4 * MAX_OUT))
+        resource.setrlimit(resource.RLIMIT_FSIZE, (fsize, fsize))
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
         if mem_mb and sys.platform == "linux":  # macOS does not enforce RLIMIT_AS
             resource.setrlimit(resource.RLIMIT_AS, (mem_mb << 20, mem_mb << 20))
@@ -41,7 +42,7 @@ def _limits(cpu: int, mem_mb: int):
 
 
 def run(cmd, stdin: str = "", timeout: float = 5.0, cwd=None, mem_mb: int = 512,
-        env: dict | None = None) -> Result:
+        env: dict | None = None, fsize: int = 4 * MAX_OUT) -> Result:
     """Run cmd in its own process group with a minimal environment; output goes to files."""
     env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "LC_ALL": "C", **(env or {})}
     with tempfile.TemporaryDirectory() as tmp:
@@ -51,7 +52,7 @@ def run(cmd, stdin: str = "", timeout: float = 5.0, cwd=None, mem_mb: int = 512,
             with out.open("wb") as o, err.open("wb") as e:
                 p = subprocess.Popen(
                     cmd, stdin=subprocess.PIPE, stdout=o, stderr=e, cwd=cwd, env=env,
-                    start_new_session=True, preexec_fn=_limits(int(timeout) + 2, mem_mb))
+                    start_new_session=True, preexec_fn=_limits(int(timeout) + 2, mem_mb, fsize))
                 try:
                     p.communicate(stdin.encode(), timeout)
                     rc, timed_out = p.returncode, False

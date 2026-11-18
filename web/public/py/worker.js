@@ -2,6 +2,7 @@
 // The network is switched off before any user code runs.
 importScripts("/pyodide/pyodide.js");
 
+const NETWORK = ["fetch", "XMLHttpRequest", "WebSocket", "EventSource", "importScripts"];
 let runCase;
 
 (async () => {
@@ -10,13 +11,18 @@ let runCase;
     const harness = await (await fetch("/py/harness.py")).text();
     py.runPython(harness);
     runCase = py.globals.get("run_case");
-    const blocked = () => {
+    // fetch and friends live on the prototype of the worker global: shadow them along the whole
+    // chain, or the program reaches the original via Object.getPrototypeOf(self).fetch.
+    const blocked = function () {
       throw new Error("the network is disabled in the runner");
     };
-    self.fetch = blocked;
-    self.XMLHttpRequest = blocked;
-    self.WebSocket = blocked;
-    self.importScripts = blocked;
+    for (let o = self; o; o = Object.getPrototypeOf(o)) {
+      for (const name of NETWORK) {
+        if (Object.getOwnPropertyDescriptor(o, name)?.configurable) {
+          Object.defineProperty(o, name, { value: blocked, writable: false, configurable: false });
+        }
+      }
+    }
     postMessage({ type: "ready" });
   } catch (e) {
     postMessage({ type: "error", message: String((e && e.message) || e) });

@@ -19,7 +19,7 @@ database_id = "REPLACE_WITH_ID_FROM_d1_create"
 # LLM = "workers-ai" | "anthropic" (needs: wrangler secret put ANTHROPIC_API_KEY) | "none".
 # With "none" (or no key) you grade yourself against the reference.
 LLM = "workers-ai"
-# Tried in order; the first may need the paid plan, then the second answers.
+# Tried in order; if one is refused or the daily allowance is used up, the next one answers.
 LLM_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast,@cf/meta/llama-3.1-8b-instruct-fast"
 ANTHROPIC_MODEL = "claude-sonnet-5-5"
 DAILY_CAP = "200"
