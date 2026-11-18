@@ -135,6 +135,19 @@ test("review: stores the session, clamps the scores and lists it in the history"
   assert.equal(home.history[0].mean, out.mean);
 });
 
+test("the export carries my mock sessions, parsed, and nobody else's", async () => {
+  await post("/api/mock/review", { problem: "Design X", turns: [I("q"), C("a")] });
+  db.raw.prepare("INSERT INTO mock_sessions(user_id, ts, problem, turns, review) " +
+    "VALUES('other', 't', 'theirs', '[]', '{}')").run();
+  db.raw.prepare("INSERT INTO mock_sessions(user_id, ts, problem, turns, review) " +
+    "VALUES('me', 't', 'broken', '{', '{')").run();
+  const out = await body(await call("/api/export"));
+  assert.equal(out.mock_sessions.length, 2);
+  assert.deepEqual(out.mock_sessions[0].turns, [I("q"), C("a")]);
+  assert.deepEqual(out.mock_sessions[0].review, REVIEW);
+  assert.equal(out.mock_sessions[1].turns, null); // unreadable rows do not break the export
+});
+
 test("review needs an answer to review", async () => {
   const res = await post("/api/mock/review", { problem: "P", turns: [I("q")] });
   assert.equal(res.status, 400);

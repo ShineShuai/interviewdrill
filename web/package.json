@@ -9,6 +9,7 @@
     "test": "node --test test/*.test.ts test/*.test.js",
     "vendor": "node scripts/vendor-pyodide.mjs",
     "icons": "node scripts/make-icons.mjs",
+    "smoke": "node scripts/smoke.ts",
     "problems": "python3 ../export_cards.py --tests public/problems",
     "predev": "npm run vendor && npm run problems && npm run icons",
     "predeploy": "npm run vendor && npm run problems && npm run icons",

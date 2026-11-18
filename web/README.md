@@ -33,6 +33,11 @@ iOS ignores SVG for the home-screen icon. `npm run icons` renders `public/icon.s
 before `npm run dev` and `npm run deploy`, and the folder is git-ignored. Keep the glyph as
 paths: text would depend on the fonts of the machine that builds.
 
+Real runtime: `npm run smoke` boots the Worker in workerd (`wrangler dev`) on a throwaway local
+D1 and checks the API, the `_headers` rules and content types over HTTP (about 40 s; no login, no
+network; the AI binding only runs remotely, so it is left out). `npx wrangler deploy --dry-run`
+checks that the Worker bundles.
+
 ## Notes
 - Daily cap (`DAILY_CAP`, default 200) counts LLM + STT calls per user per UTC day.
 - Add a user: allow their email in Access. State is already per `user_id`.

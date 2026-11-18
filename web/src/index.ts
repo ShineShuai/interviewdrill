@@ -302,13 +302,30 @@ const report: Handler = async ({ env, url, user }) => {
   return json({ days, topics: topics.results, weakest: weakest.results, trend: trend.results });
 };
 
+const tryJson = (s: string): unknown => {
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
+};
+
 const exportAll: Handler = async ({ env, user }) => {
-  const [state, attempts] = await Promise.all([
+  const [state, attempts, mocks] = await Promise.all([
     env.DB.prepare("SELECT * FROM card_state WHERE user_id = ?1").bind(user).all(),
     env.DB.prepare("SELECT * FROM attempts WHERE user_id = ?1 ORDER BY ts").bind(user).all(),
+    env.DB.prepare(
+      "SELECT id, ts, problem, turns, review FROM mock_sessions WHERE user_id = ?1 ORDER BY id",
+    )
+      .bind(user)
+      .all<{ id: number; ts: string; problem: string; turns: string; review: string }>(),
   ]);
+  const mock_sessions = mocks.results.map((m) => ({
+    ...m, turns: tryJson(m.turns), review: tryJson(m.review),
+  }));
   return json(
-    { exported: iso(new Date()), user, card_state: state.results, attempts: attempts.results },
+    { exported: iso(new Date()), user, card_state: state.results, attempts: attempts.results,
+      mock_sessions },
     200,
     { "Content-Disposition": 'attachment; filename="drill-export.json"' },
   );

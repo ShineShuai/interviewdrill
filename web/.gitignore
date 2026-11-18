@@ -3,4 +3,5 @@ public/pyodide/
 public/problems/
 public/icons/
 .wrangler/
+wrangler.smoke.toml
 .dev.vars
