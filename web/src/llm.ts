@@ -16,7 +16,7 @@ export interface JsonRequest {
   maxTokens: number;
 }
 
-// The first model is the stronger one; it may need the paid plan, so the smaller one follows.
+// The first model is the stronger one; the smaller one answers if it is refused or over budget.
 const DEFAULT_MODELS =
   "@cf/meta/llama-3.3-70b-instruct-fp8-fast,@cf/meta/llama-3.1-8b-instruct-fast";
 

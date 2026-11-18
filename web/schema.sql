@@ -14,3 +14,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS attempts_uid ON attempts(user_id, uid);
 CREATE TABLE IF NOT EXISTS usage(
   user_id TEXT NOT NULL, day TEXT NOT NULL, calls INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY(user_id, day));
+CREATE TABLE IF NOT EXISTS mock_sessions(
+  id INTEGER PRIMARY KEY, user_id TEXT NOT NULL, ts TEXT NOT NULL, problem TEXT NOT NULL,
+  turns TEXT NOT NULL, review TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS mock_sessions_user ON mock_sessions(user_id, id);

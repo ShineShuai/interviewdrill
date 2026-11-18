@@ -485,6 +485,118 @@ function review({ grade: g, score, interval, ref }, last) {
   });
 }
 
+// --- mock design interview: a model interviews you; the transcript lives here, in the page ---
+const mockMean = (x) => Number(x).toFixed(1);
+
+async function mock() {
+  const m = await api("/api/mock");
+  grader = m.grader;
+  if (grader === "none") {
+    view.replaceChildren(
+      h("h1", {}, "Mock interview"),
+      h("p", { class: "dim" }, "Needs a model: set LLM to workers-ai or anthropic in wrangler.toml."),
+    );
+    return;
+  }
+  const pick = h("select", {}, ...m.scenarios.map((s, i) => h("option", { value: i }, s)));
+  const own = h("textarea", { rows: 3, maxlength: 300, placeholder: "or type your own problem" });
+  const lines = h("input", { type: "number", min: m.lines.min, max: m.lines.max, value: m.lines.default });
+  const start = () => {
+    const n = Math.min(m.lines.max, Math.max(m.lines.min, Number(lines.value) || m.lines.default));
+    show(interview, own.value.trim() || m.scenarios[Number(pick.value)], n);
+  };
+  view.replaceChildren(
+    h("h1", {}, "Mock interview"),
+    h("p", { class: "dim" }, `A model interviews you, probes your answers and scores you (${grader}).`),
+    h("label", {}, "Scenario", pick),
+    own,
+    h("label", {}, "Interviewer lines", lines),
+    h("button", { class: "primary", onclick: start }, "Start"),
+    m.history.length ? h("h3", {}, "Recent") : null,
+    ...m.history.map((x) => h("p", { class: "dim" }, `${x.ts.slice(0, 10)} · ${mockMean(x.mean)} · ${x.problem}`)),
+  );
+}
+
+async function interview(problem, n) {
+  const turns = [];
+  const log = h("div", { class: "chat" });
+  const box = h("textarea", { rows: 6, placeholder: "Your answer" });
+  const msg = h("p", { class: "err" });
+  const aloud = h("input", { type: "checkbox" });
+  const send = h("button", { class: "primary", onclick: () => answer() }, "Send");
+  const mic = h("button", { onclick: () => toggleMic(mic, box, msg) }, "Record");
+  const finish = h("button", { onclick: () => finishNow() }, "Finish and review");
+  const lock = (on) => [send, mic, finish].forEach((b) => (b.disabled = on));
+  const say = (who, text) => {
+    turns.push({ who, text });
+    log.append(h("p", { class: who }, h("b", {}, who === "interviewer" ? "Interviewer: " : "You: "), text));
+  };
+
+  async function nextLine() {
+    lock(true);
+    msg.textContent = "…";
+    try {
+      const r = await api("/api/mock/turn", jsonPost({ problem, n, turns }));
+      msg.textContent = "";
+      say("interviewer", r.say);
+      if (aloud.checked) speak(r.say);
+      box.placeholder = r.last ? "Your answer to the final question, then Send" : "Your answer";
+    } catch (e) {
+      msg.textContent = `${errText(e)} Press Send to retry.`;
+    }
+    lock(false);
+  }
+
+  async function answer() {
+    if (turns.length % 2 === 0) return nextLine(); // the last line failed: ask again
+    const text = box.value.trim();
+    if (!text) return;
+    say("candidate", text);
+    box.value = "";
+    return turns.length / 2 >= n ? finishNow() : nextLine();
+  }
+
+  async function finishNow() {
+    if (!turns.some((t) => t.who === "candidate")) {
+      msg.textContent = "Answer at least once first.";
+      return;
+    }
+    if (turns.length % 2 === 1 && box.value.trim()) say("candidate", box.value.trim());
+    lock(true);
+    msg.textContent = "Reviewing…";
+    try {
+      const { review: r, mean } = await api("/api/mock/review", jsonPost({ problem, turns }));
+      showReview(r, mean);
+    } catch (e) {
+      msg.textContent = `${errText(e)} Press Finish to retry.`;
+      lock(false);
+    }
+  }
+
+  function showReview(r, mean) {
+    const list = (title, items) => [h("h3", {}, title), h("ul", {}, ...items.map((x) => h("li", {}, x)))];
+    view.replaceChildren(
+      h("h1", {}, `Review · ${mockMean(mean)}`),
+      h("p", { class: "dim" }, problem),
+      h("table", {}, ...Object.entries(r.scores).map(([k, v]) => h("tr", {}, h("td", {}, k), h("td", {}, String(v))))),
+      ...list("Strengths", r.strengths),
+      ...list("Gaps", r.gaps),
+      ...list("Next", r.next_steps),
+      h("button", { class: "primary", onclick: () => show(mock) }, "Done"),
+    );
+  }
+
+  view.replaceChildren(
+    h("p", { class: "dim" }, problem),
+    log,
+    box,
+    h("label", { class: "inline" }, aloud, "Read the interviewer aloud"),
+    h("div", { class: "row" }, send, mic, finish),
+    msg,
+  );
+  await nextLine();
+}
+
 async function report() {
   const r = await api("/api/report?days=14");
   const f = (x) => Number(x).toFixed(1);
@@ -523,7 +635,7 @@ async function report() {
 for (const btn of document.querySelectorAll("nav button")) {
   btn.addEventListener("click", () => {
     document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("on", b === btn));
-    show(btn.dataset.tab === "report" ? report : home);
+    show({ report, mock }[btn.dataset.tab] ?? home);
   });
 }
 addEventListener("online", flushQueue);

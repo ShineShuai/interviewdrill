@@ -40,15 +40,14 @@ class InterviewTest(unittest.TestCase):
             turns = mockmod.interview("P", n, read=answers(*texts), out=out.append)
         return turns, model, out
 
-    def test_alternates_and_ends_on_an_interviewer_line(self):
-        turns, model, _ = self.run_interview(3, "a1", "a2")
-        self.assertEqual([t["who"] for t in turns],
-                         ["interviewer", "candidate", "interviewer", "candidate", "interviewer"])
+    def test_every_line_is_answered_including_the_last(self):
+        turns, model, _ = self.run_interview(3, "a1", "a2", "a3")
+        self.assertEqual([t["who"] for t in turns], ["interviewer", "candidate"] * 3)
         self.assertEqual(turns[0]["text"], "question 1")  # stripped
         self.assertEqual(len(model.calls), 3)
 
     def test_each_question_sees_the_earlier_answers_and_the_last_is_flagged(self):
-        _, model, _ = self.run_interview(3, "my first answer", "second one")
+        _, model, _ = self.run_interview(3, "my first answer", "second one", "third")
         self.assertIn("(nothing yet)", model.calls[0][1])
         self.assertIn("Candidate: my first answer", model.calls[1][1])
         self.assertIn("Candidate: second one", model.calls[2][1])
@@ -62,7 +61,7 @@ class InterviewTest(unittest.TestCase):
         self.assertEqual(len(model.calls), 2)
 
     def test_review_gets_the_whole_transcript(self):
-        turns, _, _ = self.run_interview(2, "a1")
+        turns, _, _ = self.run_interview(2, "a1", "a2")
         model = Model()
         with mock.patch.object(llm, "call_tool", model):
             self.assertEqual(mockmod.review("P", turns), REVIEW)
@@ -95,15 +94,14 @@ class CliTest(unittest.TestCase):
         return out.getvalue()
 
     def test_full_session_prints_scores_and_saves_a_line(self):
-        text = self.main(["-n", "2", "-s", "2"], "I would start with requirements\n\n")
+        text = self.main(["-n", "2", "-s", "2"], "I would start with requirements\n\nsecond\n\n")
         self.assertIn("Interviewer: question 1", text)
         self.assertIn("mean 3.0", text)
         self.assertIn("  - no failure modes", text)
         (row,) = [json.loads(ln) for ln in (self.home / "mock.jsonl").read_text().splitlines()]
         self.assertEqual(row["problem"], mockmod.SCENARIOS[1])
         self.assertEqual(row["review"], REVIEW)
-        self.assertEqual([t["who"] for t in row["turns"]],
-                         ["interviewer", "candidate", "interviewer"])
+        self.assertEqual([t["who"] for t in row["turns"]], ["interviewer", "candidate"] * 2)
 
     def test_own_problem_and_list(self):
         self.main(["-n", "2", "-p", "Design a thumbnail service"], "answer\n\n")

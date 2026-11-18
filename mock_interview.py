@@ -75,7 +75,7 @@ def review(problem: str, turns: list[dict]) -> dict:
 
 
 def interview(problem: str, n: int, read=drill.read_answer, out=print, speak=None) -> list[dict]:
-    """n interviewer lines, each (but the last) answered by the candidate; returns the turns."""
+    """n interviewer lines, each answered by the candidate (an empty answer stops); the turns."""
     turns: list[dict] = []
     for i in range(n):
         say = interviewer_turn(problem, turns, n, last=i == n - 1)
@@ -83,8 +83,6 @@ def interview(problem: str, n: int, read=drill.read_answer, out=print, speak=Non
         out(f"\nInterviewer: {say}\n")
         if speak:
             speak(say)
-        if i == n - 1:
-            break
         answer = read().strip()
         if not answer:
             break

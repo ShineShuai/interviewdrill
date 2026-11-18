@@ -15,6 +15,7 @@
     "db:init": "wrangler d1 execute drill --remote --file schema.sql",
     "db:init:local": "wrangler d1 execute drill --local --file schema.sql",
     "db:migrate-problems": "wrangler d1 execute drill --remote --file migrations/0003_problems.sql",
+    "db:migrate-mock": "wrangler d1 execute drill --remote --file migrations/0004_mock.sql",
     "db:migrate-sync": "wrangler d1 execute drill --remote --file migrations/0002_sync.sql",
     "cards": "node scripts/sync-cards.ts --remote",
     "cards:local": "node scripts/sync-cards.ts --local"

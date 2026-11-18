@@ -385,6 +385,75 @@ class GraderDownTest(UiCase):
         expect(p.locator("h2")).to_have_text("Check yourself")
 
 
+class MockInterviewTest(UiCase):
+    def open_mock(self, own=None, lines=None):
+        p = self.page
+        p.click("nav button[data-tab=mock]")
+        expect(p.locator("h1")).to_have_text("Mock interview")
+        if own:
+            p.fill("textarea", own)
+        if lines:
+            p.fill("input[type=number]", str(lines))
+        p.click("text=Start")
+
+    def answer(self, text, expect_line):
+        self.page.fill("textarea", text)
+        self.page.click("button.primary")
+        expect(self.page.locator(".chat")).to_contain_text(expect_line)
+
+    def test_full_interview_scores_and_history(self):
+        p = self.page
+        self.open_mock(lines=2)
+        expect(p.locator(".chat")).to_contain_text("Probe 1?")
+        self.answer("Start with requirements and 1M viewers", "Probe 2?")
+        expect(p.locator("textarea")).to_have_attribute("placeholder", re.compile("final question"))
+        self.no_overflow()
+        p.fill("textarea", "Segments of 2 s behind an origin shield")
+        p.click("button.primary")
+        expect(p.locator("h1")).to_have_text("Review · 4.0")
+        expect(p.locator("table tr")).to_have_count(6)
+        expect(p.locator("body")).to_contain_text("size the origin")
+        self.no_overflow()
+        p.click("text=Done")
+        expect(p.locator("body")).to_contain_text("· 4.0 · Design a live-streaming platform")
+
+    def test_own_problem_and_finishing_early(self):
+        p = self.page
+        self.open_mock(own="Design a thumbnail service")
+        expect(p.locator(".chat")).to_contain_text("Probe 1?")
+        p.click("text=Finish and review")
+        expect(p.locator(".err")).to_have_text("Answer at least once first.")
+        self.answer("Generate them at upload", "Probe 2?")
+        p.fill("textarea", "unsent draft counts too")
+        p.click("text=Finish and review")
+        expect(p.locator("h1")).to_contain_text("Review")
+        p.click("text=Done")
+        expect(p.locator("body")).to_contain_text("Design a thumbnail service")
+
+
+class MockFailureTest(UiCase):
+    server_env = {"UI_AI_FAIL": "1"}
+
+    def test_a_failing_model_is_reported_and_can_be_retried(self):
+        p = self.page
+        p.click("nav button[data-tab=mock]")
+        p.click("text=Start")
+        expect(p.locator(".err")).to_contain_text("grader unavailable")
+        expect(p.locator(".err")).to_contain_text("Press Send to retry")
+        expect(p.locator("button.primary")).to_be_enabled()
+        self.no_overflow()
+        self.problems.clear()  # the 502 is logged by the browser
+
+
+class MockWithoutGraderTest(UiCase):
+    server_env = {"UI_LLM": "none"}
+
+    def test_explains_that_it_needs_a_model(self):
+        self.page.click("nav button[data-tab=mock]")
+        expect(self.page.locator("body")).to_contain_text("Needs a model")
+        expect(self.page.locator("button.primary")).to_have_count(0)
+
+
 class IconsTest(UiCase):
     """The PNG icons iOS and Android need are built from icon.svg (`npm run icons`)."""
 

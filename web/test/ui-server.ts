@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import type { Env } from "../src/env.ts";
 import { parseCards, syncSql } from "../src/cards.ts";
 import { handle } from "../src/index.ts";
+import { AXES } from "../src/mock.ts";
 import { fakeD1 } from "./fake-d1.ts";
 
 const here = (rel: string): string => fileURLToPath(new URL(rel, import.meta.url));
@@ -108,7 +109,18 @@ const env = {
   AI: {
     run: async (_model: string, input: Record<string, unknown>) => {
       if (process.env.UI_AI_FAIL) throw new Error("ai down");
-      return "audio" in input ? { text: "spoken words" } : { response: JSON.stringify(GRADE) };
+      if ("audio" in input) return { text: "spoken words" };
+      const schema = JSON.stringify((input.response_format as { json_schema?: unknown })?.json_schema);
+      if (schema?.includes('"say"')) { // mock interview: echo which line this is
+        const k = /line (\d+) of/.exec(JSON.stringify(input.messages))?.[1];
+        return { response: JSON.stringify({ say: `Probe ${k}?` }) };
+      }
+      if (schema?.includes('"scores"')) {
+        const scores = Object.fromEntries(AXES.map((a) => [a, 4]));
+        return { response: JSON.stringify({ scores, strengths: ["clear"], gaps: ["numbers"],
+          next_steps: ["size the origin"] }) };
+      }
+      return { response: JSON.stringify(GRADE) };
     },
   },
   LLM: process.env.UI_LLM ?? "workers-ai",

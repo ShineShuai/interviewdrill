@@ -4,6 +4,10 @@ import { HttpError, json } from "./http.ts";
 import { checklist } from "./checklist.ts";
 import { judge, score, type Grade } from "./judge.ts";
 import { providerOf } from "./llm.ts";
+import {
+  LINES, SCENARIOS, interviewerLine, lineDue, meanScore, parseLines, parseProblem, parseReview,
+  parseTurns, reviewInterview, type Review,
+} from "./mock.ts";
 import { iso, replay, schedule, streak, type CardState } from "./srs.ts";
 
 interface Ctx {
@@ -461,6 +465,57 @@ const syncPull: Handler = async ({ env, url, user }) => {
   return json({ attempts, next: attempts.length ? attempts[attempts.length - 1].id : after });
 };
 
+const needGrader = (env: Env): void => {
+  if (providerOf(env) === "none") throw new HttpError(409, "no grader configured: mock needs a model");
+};
+
+const mockHome: Handler = async ({ env, user }) => {
+  const rows = await env.DB.prepare(
+    "SELECT id, ts, problem, review FROM mock_sessions WHERE user_id = ?1 ORDER BY id DESC LIMIT 10",
+  )
+    .bind(user)
+    .all<{ id: number; ts: string; problem: string; review: string }>();
+  const history = rows.results.flatMap((r) => {
+    try {
+      const mean = meanScore(JSON.parse(r.review) as Review);
+      return [{ id: r.id, ts: r.ts, problem: r.problem, mean }];
+    } catch {
+      return [];
+    }
+  });
+  return json({ grader: providerOf(env), scenarios: SCENARIOS, lines: LINES, history });
+};
+
+/** The interviewer's next line. The client sends the whole transcript; nothing is stored yet. */
+const mockTurn: Handler = async ({ req, env, user }) => {
+  const body = await readJson(req);
+  const problem = parseProblem(body.problem);
+  const n = parseLines(body.n);
+  const turns = parseTurns(body.turns);
+  if (!lineDue(turns)) throw new HttpError(400, "it is the candidate's turn");
+  if (turns.length / 2 >= n) throw new HttpError(400, "the interview is over: ask for the review");
+  needGrader(env);
+  await takeQuota(env, user);
+  const say = await interviewerLine(env, problem, turns, n);
+  return json({ say, last: turns.length / 2 + 1 === n });
+};
+
+const mockReview: Handler = async ({ req, env, user }) => {
+  const body = await readJson(req);
+  const problem = parseProblem(body.problem);
+  const turns = parseTurns(body.turns);
+  if (!turns.some((t) => t.who === "candidate")) throw new HttpError(400, "nothing to review");
+  needGrader(env);
+  await takeQuota(env, user);
+  const review = await reviewInterview(env, problem, turns);
+  await env.DB.prepare(
+    "INSERT INTO mock_sessions(user_id, ts, problem, turns, review) VALUES(?1, ?2, ?3, ?4, ?5)",
+  )
+    .bind(user, iso(new Date()), problem, JSON.stringify(turns), JSON.stringify(review))
+    .run();
+  return json({ review, mean: meanScore(review) });
+};
+
 const ROUTES: Record<string, Handler> = {
   "GET /api/status": status,
   "GET /api/next": next,
@@ -472,6 +527,9 @@ const ROUTES: Record<string, Handler> = {
   "POST /api/sync/push": syncPush,
   "GET /api/sync/pull": syncPull,
   "POST /api/stt": stt,
+  "GET /api/mock": mockHome,
+  "POST /api/mock/turn": mockTurn,
+  "POST /api/mock/review": mockReview,
   "GET /api/report": report,
   "GET /api/export": exportAll,
 };

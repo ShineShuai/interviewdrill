@@ -74,6 +74,18 @@ worker. The result (passed/total) updates the card's schedule like `problems.py 
   prototype chain) but is not a sandbox against a hostile program. Pyodide sometimes reports a
   blocked call as `SystemError` instead of the error text; the run still fails.
 
+## Mock design interview
+The Mock tab: a model plays the interviewer for a video-streaming (or your own) system-design
+problem. It asks 2-12 lines, probes the weakest part of each answer, and after the last answer
+(or "Finish and review") scores requirements, estimation, architecture, depth, trade-offs and
+communication. Voice works like on cards (Record), and "Read the interviewer aloud" speaks the
+lines. The transcript lives in the page; the server stores only the finished session in
+`mock_sessions` (the 10 latest show under Recent).
+- Existing database: `npm run db:migrate-mock` once (fresh ones have the table).
+- Needs a grader (`workers-ai` or `anthropic`); there is no self-grading mode.
+- Costs one LLM call per interviewer line plus one for the review (6 for the default 5 lines),
+  counted against `DAILY_CAP`. The terminal version is `../mock_interview.py` (same prompts).
+
 ## CLI sync (cards, problems and bugs)
 `sync.py` shares attempts between the CLI and the web app: attempts are append-only events,
 each side rebuilds a card's schedule by replaying them in time order, so devices converge.
