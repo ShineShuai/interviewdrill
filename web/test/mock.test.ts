@@ -148,6 +148,33 @@ test("the export carries my mock sessions, parsed, and nobody else's", async () 
   assert.equal(out.mock_sessions[1].turns, null); // unreadable rows do not break the export
 });
 
+test("report: mock averages per axis, weakest axis, window and owner", async () => {
+  const add = db.raw.prepare(
+    "INSERT INTO mock_sessions(user_id, ts, problem, turns, review) VALUES(?, ?, ?, '[]', ?)",
+  );
+  const day = (back: number) => new Date(Date.now() - back * 86_400_000).toISOString();
+  const rev = (depth: number, estimation: number) =>
+    JSON.stringify({ ...REVIEW, scores: { ...REVIEW.scores, depth, estimation } });
+  add.run("me", day(1), "first", rev(2, 4));
+  add.run("me", day(0.5), "second", rev(4, 4));
+  add.run("me", day(0.2), "broken", "{nope");
+  add.run("me", day(60), "too old", rev(0, 0));
+  add.run("other", day(1), "theirs", rev(0, 0));
+  const out = await body(await call("/api/report?days=14"));
+  assert.equal(out.mock.n, 2);
+  assert.equal(out.mock.axes.depth, 3);
+  assert.equal(out.mock.axes.estimation, 4);
+  assert.equal(out.mock.axes.requirements, 3);
+  assert.equal(out.mock.mean, (3 * 4 + 3 + 4) / 6);
+  assert.equal(out.mock.weakest, "requirements"); // first axis among the lowest (3)
+  assert.deepEqual(out.mock.recent.map((r: { problem: string }) => r.problem), ["second", "first"]);
+  const none = await body(await call("/api/report?days=0")); // clamped to 1 day: only "second"
+  assert.equal(none.mock.n, 1);
+  env = { ...env, DB: fakeD1() as unknown as Env["DB"] };
+  const empty = await body(await call("/api/report"));
+  assert.deepEqual([empty.mock.n, empty.mock.weakest, empty.mock.recent], [0, null, []]);
+});
+
 test("review needs an answer to review", async () => {
   const res = await post("/api/mock/review", { problem: "P", turns: [I("q")] });
   assert.equal(res.status, 400);

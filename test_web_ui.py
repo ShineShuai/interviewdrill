@@ -416,6 +416,10 @@ class MockInterviewTest(UiCase):
         self.no_overflow()
         p.click("text=Done")
         expect(p.locator("body")).to_contain_text("· 4.0 · Design a live-streaming platform")
+        p.click("nav button[data-tab=report]")
+        expect(p.locator("body")).to_contain_text("Mock interviews")
+        expect(p.locator("body")).to_contain_text("1 session · mean 4.0 · weakest: requirements")
+        self.no_overflow()
 
     def test_own_problem_and_finishing_early(self):
         p = self.page

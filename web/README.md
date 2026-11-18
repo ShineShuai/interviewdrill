@@ -85,7 +85,8 @@ problem. It asks 2-12 lines, probes the weakest part of each answer, and after t
 (or "Finish and review") scores requirements, estimation, architecture, depth, trade-offs and
 communication. Voice works like on cards (Record), and "Read the interviewer aloud" speaks the
 lines. The transcript lives in the page; the server stores only the finished session in
-`mock_sessions` (the 10 latest show under Recent).
+`mock_sessions` (the 10 latest show under Recent; the Report tab adds the average per axis and
+the weakest axis over its window, and the export includes the sessions).
 - Existing database: `npm run db:migrate-mock` once (fresh ones have the table).
 - Needs a grader (`workers-ai` or `anthropic`); there is no self-grading mode.
 - Costs one LLM call per interviewer line plus one for the review (6 for the default 5 lines),

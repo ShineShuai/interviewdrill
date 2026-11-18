@@ -597,6 +597,16 @@ async function interview(problem, n) {
   await nextLine();
 }
 
+function mockReport(m) {
+  if (!m?.n) return [];
+  return [
+    h("h3", {}, "Mock interviews"),
+    h("p", { class: "dim" }, `${m.n} session${m.n === 1 ? "" : "s"} · mean ${mockMean(m.mean)} · weakest: ${m.weakest}`),
+    h("table", {}, ...Object.entries(m.axes).map(([k, v]) => h("tr", {}, h("td", {}, k), h("td", {}, mockMean(v))))),
+    ...m.recent.map((x) => h("p", { class: "dim" }, `${x.ts.slice(0, 10)} · ${mockMean(x.mean)} · ${x.problem}`)),
+  ];
+}
+
 async function report() {
   const r = await api("/api/report?days=14");
   const f = (x) => Number(x).toFixed(1);
@@ -628,6 +638,7 @@ async function report() {
     ...r.trend.map((d) =>
       h("label", {}, `${d.day.slice(5)} (${d.n})`, h("progress", { max: 5, value: d.score })),
     ),
+    ...mockReport(r.mock),
     h("p", {}, h("a", { href: "/api/export", download: "drill-export.json" }, "Export data")),
   );
 }

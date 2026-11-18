@@ -1,7 +1,7 @@
 """Run untrusted code with time, CPU, file-size and (optionally) memory limits.
 
 Not a security boundary. Set DRILL_SANDBOX=docker to run generated Python in a container
-(no network, 512 MB, 64 pids). Sanitizer runs pass mem_mb=0: ASan needs a large address space.
+(no network, 512 MB, 64 pids, read-only, no capabilities). Sanitizer runs pass mem_mb=0: ASan needs a large address space.
 """
 import os
 import resource
@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -70,8 +71,15 @@ def run(cmd, stdin: str = "", timeout: float = 5.0, cwd=None, mem_mb: int = 512,
 def run_py(script: Path, *args: str, stdin: str = "", timeout: float = 5.0) -> Result:
     """Run a generated Python script (isolated mode), or in Docker if DRILL_SANDBOX=docker."""
     if os.environ.get("DRILL_SANDBOX") == "docker":
-        cmd = ["docker", "run", "--rm", "-i", "--network", "none", "--memory", "512m",
-               "--pids-limit", "64", "-v", f"{script.parent.resolve()}:/w:ro", "-w", "/w",
+        # Killing the `docker run` client does not stop the container: name it, kill it ourselves.
+        name = f"drill-{uuid.uuid4().hex[:12]}"
+        cmd = ["docker", "run", "--rm", "-i", "--name", name, "--network", "none",
+               "--memory", "512m", "--pids-limit", "64", "--cap-drop", "ALL",
+               "--security-opt", "no-new-privileges", "--read-only", "--tmpfs", "/tmp",
+               "-v", f"{script.parent.resolve()}:/w:ro", "-w", "/w",
                "python:3.12-slim", "python", "-I", script.name, *args]
-        return run(cmd, stdin, timeout + 10, mem_mb=0)
+        result = run(cmd, stdin, timeout + 10, mem_mb=0)
+        if result.timeout:
+            subprocess.run(["docker", "kill", name], capture_output=True, check=False, timeout=30)
+        return result
     return run([sys.executable, "-I", str(script), *args], stdin, timeout)

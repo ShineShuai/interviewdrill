@@ -163,3 +163,31 @@ export async function reviewInterview(env: Env, problem: string, turns: Turn[]):
     await callJson(env, { system: REVIEW_SYSTEM, tool: REVIEW_TOOL, prompt, maxTokens: 1500 }),
   );
 }
+
+export interface MockSummary {
+  n: number;
+  mean: number;
+  axes: Record<Axis, number>;
+  weakest: Axis | null;
+  recent: { ts: string; problem: string; mean: number }[]; // newest first, at most 5
+}
+
+/** Averages over stored sessions (rows oldest first); unreadable reviews are skipped. */
+export function summarize(rows: { ts: string; problem: string; review: string }[]): MockSummary {
+  const ok = rows.flatMap((r) => {
+    try {
+      return [{ ts: r.ts, problem: r.problem, review: parseReview({ ...JSON.parse(r.review) }) }];
+    } catch {
+      return [];
+    }
+  });
+  const axes = Object.fromEntries(
+    AXES.map((a) => [a, ok.length ? ok.reduce((sum, r) => sum + r.review.scores[a], 0) / ok.length : 0]),
+  ) as Record<Axis, number>;
+  const mean = ok.length ? AXES.reduce((sum, a) => sum + axes[a], 0) / AXES.length : 0;
+  const weakest = ok.length ? AXES.reduce((w, a) => (axes[a] < axes[w] ? a : w)) : null;
+  const recent = ok.slice(-5).reverse().map((r) => ({
+    ts: r.ts, problem: r.problem, mean: meanScore(r.review),
+  }));
+  return { n: ok.length, mean, axes, weakest, recent };
+}
