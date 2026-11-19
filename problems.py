@@ -9,7 +9,7 @@
 
 Verification: reference == brute force on random small inputs, the statement examples match
 the reference, the reference fits the time limit on large inputs, and the known-wrong
-solutions fail the tests. The model comes from llm.py (Anthropic, any OpenAI-compatible
+solutions fail the tests (one that survives is sent back to the model for repair). The model comes from llm.py (Anthropic, any OpenAI-compatible
 endpoint, or claude.ai by copy and paste). Env: DRILL_PROBLEMS, DRILL_SANDBOX, DRILL_LLM*.
 """
 import argparse
@@ -52,8 +52,12 @@ Return:
 - reference: efficient Python 3 solution (reads stdin, writes stdout).
 - brute: obviously correct brute-force Python 3 solution (slow is fine).
 - generator: Python 3 script; argv = seed size; prints one valid input. Sizes 1..8 are tiny
-  cases (cover edge cases: minimum size, duplicates, negatives, ties); size 50000 is large.
+  cases (cover edge cases: minimum size, duplicates, negatives, ties); size 50000 is large:
+  there an even seed gives a random input and an odd seed a worst case for the slow solutions
+  (all equal, sorted, long runs, few distinct values), so that they really run out of time.
 - wrong: 2-3 plausible but incorrect Python solutions (off-by-one, missed edge case, too slow).
+  Each must fail some test; one that is actually correct, or too slow only on inputs the
+  generator never makes, is useless.
 - approach: 2-4 sentences: the intended algorithm, its complexity and the key edge cases.
 Standard library only. Use the seed for all randomness."""
 
@@ -152,20 +156,22 @@ def verify(spec: dict, work: Path, small: int = N_SMALL, large: int = N_LARGE,
         cases.append((f"large{seed}", g.out, a.out))
     limit = round(min(10.0, max(2.0, 4 * ref_secs)), 1)
 
-    killed = 0
-    for path in wrong:
+    survivors = []  # 1-based numbers of the wrong solutions that passed every test
+    for i, path in enumerate(wrong, 1):
         for _, inp, exp in cases:
             r = sandbox.run_py(path, stdin=inp, timeout=limit)
             if not r.ok or norm_out(r.out) != norm_out(exp):
-                killed += 1
                 break
+        else:
+            survivors.append(i)
 
     (work / "tests").mkdir(exist_ok=True)
     for name, inp, exp in cases:
         (work / "tests" / f"{name}.in").write_text(inp)
         (work / "tests" / f"{name}.out").write_text(exp)
     return {"small_agree": small, "large_ref_secs": round(ref_secs, 2), "time_limit": limit,
-            "mutants": len(wrong), "mutants_killed": killed}, ""
+            "mutants": len(wrong), "mutants_killed": len(wrong) - len(survivors),
+            "survivors": survivors}, ""
 
 
 def propose(topic, difficulty, avoid, prev=None, feedback=None) -> dict:
@@ -181,7 +187,7 @@ def propose(topic, difficulty, avoid, prev=None, feedback=None) -> dict:
 def make_problem(topic, difficulty, avoid, propose_fn=propose, repairs=2, **vkw):
     """Propose, verify, and feed failures back for repair. Returns (pending_dir | None, reason)."""
     prev, feedback, reason = None, None, ""
-    for _ in range(repairs + 1):
+    for attempt in range(repairs + 1):
         spec = propose_fn(topic, difficulty, avoid, prev, feedback)
         title = str(spec.get("title", "")).strip() if isinstance(spec, dict) else ""
         dup = next((t for t in avoid if title and gen.similar(title, t)), None)
@@ -191,6 +197,12 @@ def make_problem(topic, difficulty, avoid, propose_fn=propose, repairs=2, **vkw)
             continue
         work = PENDING / unique_slug(title)
         report, reason = verify(spec, work, **vkw)
+        if report and report["survivors"] and attempt < repairs:  # the last try is kept as it is
+            reason = (f"wrong solution(s) {report['survivors']} (numbered from 1) passed every test "
+                      f"({report['time_limit']} s limit). Make each one really wrong: a too-slow "
+                      "solution needs a worst-case large input from the generator (odd seed), and a "
+                      "solution that is actually correct must be replaced.")
+            report = None
         if report:
             meta = {"id": work.name, "title": title, "topic": topic,
                     "difficulty": max(1, min(5, int(spec.get("difficulty") or difficulty))),

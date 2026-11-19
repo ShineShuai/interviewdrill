@@ -125,10 +125,15 @@ Answers are graded by `LLM` in `wrangler.toml`:
 - `workers-ai` (default): Cloudflare's own models through the `AI` binding. No key; the free
   plan has a daily allowance (10,000 "neurons", shared with speech-to-text; Cloudflare's pricing
   page, Nov 2026). Both default models are open to the free plan; only newer models (Kimi, GLM,
-  DeepSeek V4 ...) need paid billing. One graded answer costs roughly 60 neurons on the 70B model,
-  so expect about 150 per day. `LLM_MODEL` lists models to try in order; if the first is refused
-  or the allowance is used up, the next one answers, and if all fail the app offers "Grade
-  myself". A model that refuses JSON mode is asked once more with the schema in the prompt.
+  DeepSeek V4 ...) need paid billing. One graded answer costs about 60 neurons on the 70B model
+  (about 600 input tokens at 26,668 neurons per million and 200 output tokens at 204,805; the
+  output is most of it), so expect about 150 per day. A voice answer adds about 47 neurons per
+  minute of audio (whisper-large-v3-turbo) and a 5-line mock session costs about 380.
+  Cloudflare's JSON-mode list (Sep 2026) names the 70B model but not `llama-3.1-8b-instruct-fast`;
+  if that model refuses `response_format`, the schema goes into the prompt instead. Its May 2026
+  deprecation notice keeps the `-fast` models and retires the plain `llama-3.1-8b-instruct`.
+  `LLM_MODEL` lists models to try in order; if the first is refused or the allowance is used up,
+  the next one answers, and if all fail the app offers "Grade myself". A model that refuses JSON mode is asked once more with the schema in the prompt.
 - `anthropic`: `npx wrangler secret put ANTHROPIC_API_KEY`, set `LLM = "anthropic"`.
 - `none`: no model. "Grade myself" shows the reference and a checklist; you tick what your
   answer covered and the share is the score (it is stored and scheduled like any other grade).

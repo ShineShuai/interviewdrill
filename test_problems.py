@@ -89,7 +89,7 @@ class VerifyTest(Base):
         work = problems.PENDING / "good"
         report, reason = problems.verify(SPEC, work, **FAST)
         self.assertEqual(reason, "")
-        self.assertEqual((report["mutants"], report["mutants_killed"]), (2, 2))
+        self.assertEqual((report["mutants"], report["mutants_killed"], report["survivors"]), (2, 2, []))
         names = sorted(p.stem for p in (work / "tests").glob("*.in"))
         self.assertEqual(len(names), 2 + 12 + 1)
         self.assertEqual((work / "tests" / "ex1.out").read_text().strip(), "7")
@@ -133,6 +133,29 @@ class RepairTest(Base):
         self.assertEqual(calls[1][0]["brute"], "print(0)")
         meta = json.loads((work / "problem.json").read_text())
         self.assertEqual((meta["id"], meta["topic"]), (work.name, "arrays"))
+        shutil.rmtree(work)
+
+    def test_a_wrong_solution_that_survives_is_fed_back(self):
+        calls = []
+        fine = {**SPEC, "wrong": [WRONG_EMPTY, REF]}  # REF is correct: no test can kill it
+
+        def propose(topic, difficulty, avoid, prev, feedback):
+            calls.append(feedback)
+            return fine if len(calls) == 1 else SPEC
+
+        work, reason = problems.make_problem("arrays", 2, [], propose, repairs=1, **FAST)
+        self.assertEqual(reason, "")
+        self.assertIn("[2] (numbered from 1) passed every test", calls[1])
+        verified = json.loads((work / "problem.json").read_text())["provenance"]["verified"]
+        self.assertEqual((verified["mutants"], verified["mutants_killed"]), (2, 2))
+        shutil.rmtree(work)
+
+    def test_survivors_are_accepted_when_no_repair_is_left(self):
+        fine = {**SPEC, "wrong": [WRONG_EMPTY, REF]}
+        work, reason = problems.make_problem("arrays", 2, [], lambda *a: fine, repairs=0, **FAST)
+        self.assertEqual(reason, "")
+        verified = json.loads((work / "problem.json").read_text())["provenance"]["verified"]
+        self.assertEqual((verified["mutants_killed"], verified["survivors"]), (1, [2]))
         shutil.rmtree(work)
 
     def test_gives_up_and_cleans_up(self):
