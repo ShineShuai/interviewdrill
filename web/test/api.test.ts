@@ -205,7 +205,7 @@ test("report and export", async () => {
   assert.equal(r.weakest[0].question, "Q three?");
   assert.equal(r.trend[0].n, 2);
   const res = await call("/api/export");
-  assert.match(res.headers.get("content-disposition") ?? "", /drill-export\.json/);
+  assert.match(res.headers.get("content-disposition") ?? "", /interviewdrill-export\.json/);
   const ex = (await res.json()) as { attempts: unknown[]; card_state: unknown[] };
   assert.deepEqual([ex.attempts.length, ex.card_state.length], [2, 2]);
 });
