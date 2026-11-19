@@ -3,30 +3,14 @@
 // No Cloudflare login and no network. The AI binding only runs remotely, so it is left out and
 // LLM is "none": grading goes through "Grade myself".
 // Usage: node scripts/smoke.ts [PORT]      (or: npm run smoke; needs `npm install`)
-import { execFileSync, spawn } from "node:child_process";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { request } from "node:http";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { parseCards, syncSql } from "../src/cards.ts";
+import { boot, cards, root } from "./workerd.ts";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
 const port = Number(process.argv[2] ?? 8799);
 const base = `http://127.0.0.1:${port}`;
-const tmp = mkdtempSync(join(tmpdir(), "drill-smoke-"));
-const config = join(root, "wrangler.smoke.toml"); // next to wrangler.toml: paths are relative
-const state = join(tmp, "state");
-
-const cardsDir = new URL("../../cards/", import.meta.url);
-const cards = readdirSync(cardsDir)
-  .filter((f) => f.endsWith(".md"))
-  .sort()
-  .flatMap((f) => parseCards(f.slice(0, -3), readFileSync(new URL(f, cardsDir), "utf8")));
-
-const wrangler = (...args: string[]): string =>
-  execFileSync("npx", ["wrangler", ...args], { cwd: root, encoding: "utf8", stdio: "pipe" });
 
 interface Reply {
   status: number;
@@ -60,45 +44,6 @@ const check = async (name: string, fn: () => Promise<void>): Promise<void> => {
   }
 };
 
-async function boot(): Promise<() => void> {
-  const toml = readFileSync(join(root, "wrangler.toml"), "utf8")
-    .replace(/\[ai\]\nbinding = "AI"\n\n?/, "")
-    .replace('LLM = "workers-ai"', 'LLM = "none"');
-  writeFileSync(config, toml);
-  writeFileSync(join(tmp, "cards.sql"), syncSql(cards));
-  for (const file of [join(root, "schema.sql"), join(tmp, "cards.sql")]) {
-    wrangler("d1", "execute", "interviewdrill", "--local", "-c", config, "--persist-to", state, "--file", file);
-  }
-  const dev = spawn(
-    "npx",
-    ["wrangler", "dev", "-c", config, "--port", String(port), "--ip", "127.0.0.1",
-      "--persist-to", state, "--var", "DEV_USER:me"],
-    { cwd: root, detached: true, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, CI: "1" } },
-  );
-  const stop = () => {
-    try {
-      process.kill(-(dev.pid as number), "SIGTERM"); // the whole group: npx, node and workerd
-    } catch {
-      // already gone
-    }
-  };
-  let log = "";
-  await new Promise<void>((ok, fail) => {
-    const timer = setTimeout(() => fail(new Error(`wrangler dev not ready in 120 s:\n${log}`)), 120_000);
-    const feed = (c: Buffer) => {
-      log += c.toString();
-      if (log.includes("Ready on")) {
-        clearTimeout(timer);
-        ok();
-      }
-    };
-    dev.stdout.on("data", feed);
-    dev.stderr.on("data", feed);
-    dev.on("exit", (code) => fail(new Error(`wrangler dev exited (${code}):\n${log}`)));
-  });
-  return stop;
-}
-
 function headerRules(): Record<string, string> {
   const lines = readFileSync(join(root, "public", "_headers"), "utf8").split("\n").slice(1);
   return Object.fromEntries(
@@ -111,7 +56,7 @@ function headerRules(): Record<string, string> {
 
 let stop = () => {};
 try {
-  stop = await boot();
+  stop = await boot(port);
   const ids: string[] = [];
 
   await check("status: every card is due, nobody grades but you", async () => {
@@ -188,8 +133,6 @@ try {
   results.push(["boot", e instanceof Error ? e.message : String(e)]);
 } finally {
   stop();
-  rmSync(config, { force: true });
-  rmSync(tmp, { recursive: true, force: true });
 }
 
 for (const [name, err] of results) console.log(`${err ? "FAIL" : "ok  "} ${name}${err ? `\n     ${err}` : ""}`);

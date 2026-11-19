@@ -607,6 +607,17 @@ function mockReport(m) {
   ];
 }
 
+function mockTrendView(t) {
+  if (!t || t.points.length < 2) return [];
+  const by = Math.round(t.change.by * 10) / 10;
+  const k = t.change.k;
+  return [
+    h("h3", {}, "Mock score trend"),
+    h("p", { class: "dim" }, `${by > 0 ? "+" : ""}${by.toFixed(1)} (latest ${k} vs the ${k} before)`),
+    ...t.points.map((x) => h("label", {}, x.ts.slice(5, 10), h("progress", { max: 5, value: x.mean }))),
+  ];
+}
+
 async function report() {
   const r = await api("/api/report?days=14");
   const f = (x) => Number(x).toFixed(1);
@@ -639,6 +650,7 @@ async function report() {
       h("label", {}, `${d.day.slice(5)} (${d.n})`, h("progress", { max: 5, value: d.score })),
     ),
     ...mockReport(r.mock),
+    ...mockTrendView(r.mock_trend),
     h("p", {}, h("a", { href: "/api/export", download: "interviewdrill-export.json" }, "Export data")),
   );
 }

@@ -164,6 +164,26 @@ export async function reviewInterview(env: Env, problem: string, turns: Turn[]):
   );
 }
 
+export interface MockTrend {
+  points: { ts: string; mean: number }[]; // session means, oldest first
+  change: { by: number; k: number } | null; // mean of the latest k sessions minus the k before
+}
+
+/** Session means over time (rows oldest first); unreadable reviews are skipped. */
+export function mockTrend(rows: { ts: string; review: string }[]): MockTrend {
+  const points = rows.flatMap((r) => {
+    try {
+      return [{ ts: r.ts, mean: meanScore(parseReview({ ...JSON.parse(r.review) })) }];
+    } catch {
+      return [];
+    }
+  });
+  const k = Math.min(3, Math.floor(points.length / 2));
+  const avg = (p: typeof points): number => p.reduce((sum, x) => sum + x.mean, 0) / p.length;
+  const change = k ? { by: avg(points.slice(-k)) - avg(points.slice(-2 * k, -k)), k } : null;
+  return { points, change };
+}
+
 export interface MockSummary {
   n: number;
   mean: number;

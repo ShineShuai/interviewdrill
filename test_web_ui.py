@@ -2,7 +2,9 @@
 
 The server runs the real Worker on an in-memory D1 with the real cards and the real security
 headers; Workers AI is a stand-in, and so is Pyodide except in RealPyodideTest (needs
-`npm install` in web/). Skipped when Playwright, Chromium or Node 22+ is not available.
+`npm install` in web/). WorkerdTest runs the same browser against the real runtime instead
+(`wrangler dev`: workerd, local D1, real asset layer and _headers; needs `npm install` in web/ and
+about 20 s per test to boot). Skipped when Playwright, Chromium or Node 22+ is not available.
 """
 import contextlib
 import os
@@ -51,6 +53,25 @@ def serve(**env):
         proc.stdout.close()
 
 
+@contextlib.contextmanager
+def workerd(**_env):
+    """The real Worker in workerd (scripts/workerd-server.ts), LLM \"none\", the real cards only."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    proc = subprocess.Popen(["node", "scripts/workerd-server.ts", str(port)], cwd=WEB,
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    try:
+        if proc.stdout.readline().strip() != "ready":
+            raise RuntimeError("workerd did not start")
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        proc.terminate()  # the script stops wrangler and removes its files; a closed stdin does the same
+        proc.wait()
+        proc.stdout.close()
+        proc.stdin.close()
+
+
 def setUpModule():
     global PW, BROWSER
     if sync_playwright is None:
@@ -70,10 +91,11 @@ def tearDownModule():
 
 class UiCase(unittest.TestCase):
     server_env: dict = {}
+    launch = staticmethod(serve)
 
     def setUp(self):
-        # a fresh server (empty in-memory database) per test: tests do not share attempts
-        serving = serve(**self.server_env)
+        # a fresh server (empty database) per test: tests do not share attempts
+        serving = self.launch(**self.server_env)
         self.base = serving.__enter__()
         self.addCleanup(serving.__exit__, None, None, None)
         self.ctx = BROWSER.new_context(viewport=MOBILE, permissions=["microphone"])
@@ -98,6 +120,36 @@ class UiCase(unittest.TestCase):
         self.page.select_option("select", topic)
         self.page.fill("input[type=number]", str(n))
         self.page.click("text=Start")
+
+    def go_offline(self, forget_cards=False):
+        p = self.page
+        p.evaluate("navigator.serviceWorker.ready.then(() => true)")
+        p.reload()  # now controlled by the worker
+        self.wait_until("navigator.serviceWorker.controller !== null")
+        self.wait_for_cache()
+        p.wait_for_load_state("networkidle")  # a refresh of the cache may still be running
+        if forget_cards:
+            p.evaluate("localStorage.clear()")
+        self.ctx.set_offline(True)
+        p.reload()
+        self.problems.clear()  # the browser logs the requests that fail offline
+
+    def wait_until(self, js, seconds=10):
+        """Poll an expression with evaluate: wait_for_function would eval it under the page's CSP."""
+        for _ in range(int(seconds * 10)):
+            if self.page.evaluate(js):
+                return
+            self.page.wait_for_timeout(100)
+        self.fail(f"timed out waiting for: {js}")
+
+    def wait_for_cache(self):
+        self.wait_until("JSON.parse(localStorage.getItem('drill.cards') || '[]').length > 0")
+
+    def queue(self, key="drill.queue"):
+        return self.page.evaluate(f"JSON.parse(localStorage.getItem('{key}') || '[]')")
+
+    def exported(self):
+        return self.page.request.get(self.base + "/api/export").json()
 
 
 class GradedTest(UiCase):
@@ -302,35 +354,6 @@ class GradedTest(UiCase):
         self.assertEqual(len(self.queue()), 1)
         self.problems.clear()
 
-    def go_offline(self, forget_cards=False):
-        p = self.page
-        p.evaluate("navigator.serviceWorker.ready.then(() => true)")
-        p.reload()  # now controlled by the worker
-        self.wait_until("navigator.serviceWorker.controller !== null")
-        self.wait_for_cache()
-        p.wait_for_load_state("networkidle")  # a refresh of the cache may still be running
-        if forget_cards:
-            p.evaluate("localStorage.clear()")
-        self.ctx.set_offline(True)
-        p.reload()
-        self.problems.clear()  # the browser logs the requests that fail offline
-
-    def wait_until(self, js, seconds=10):
-        """Poll an expression with evaluate: wait_for_function would eval it under the page's CSP."""
-        for _ in range(int(seconds * 10)):
-            if self.page.evaluate(js):
-                return
-            self.page.wait_for_timeout(100)
-        self.fail(f"timed out waiting for: {js}")
-
-    def wait_for_cache(self):
-        self.wait_until("JSON.parse(localStorage.getItem('drill.cards') || '[]').length > 0")
-
-    def queue(self, key="drill.queue"):
-        return self.page.evaluate(f"JSON.parse(localStorage.getItem('{key}') || '[]')")
-
-    def exported(self):
-        return self.page.request.get(self.base + "/api/export").json()
 
     def test_installable_and_works_offline(self):
         p = self.page
@@ -421,6 +444,21 @@ class MockInterviewTest(UiCase):
         expect(p.locator("body")).to_contain_text("1 session · mean 4.0 · weakest: requirements")
         self.no_overflow()
 
+    def test_report_shows_the_score_trend(self):
+        p = self.page
+        for _ in range(2):
+            self.open_mock(lines=2)
+            self.answer("Start with requirements", "Probe 2?")
+            p.fill("textarea", "Segments behind an origin shield")
+            p.click("button.primary")
+            expect(p.locator("h1")).to_have_text("Review · 4.0")
+            p.click("text=Done")
+        p.click("nav button[data-tab=report]")
+        expect(p.locator("body")).to_contain_text("Mock score trend")
+        expect(p.locator("body")).to_contain_text("0.0 (latest 1 vs the 1 before)")
+        expect(p.locator("progress")).to_have_count(2)  # one bar per session
+        self.no_overflow()
+
     def test_own_problem_and_finishing_early(self):
         p = self.page
         self.open_mock(own="Design a thumbnail service")
@@ -456,6 +494,55 @@ class MockWithoutGraderTest(UiCase):
         self.page.click("nav button[data-tab=mock]")
         expect(self.page.locator("body")).to_contain_text("Needs a model")
         expect(self.page.locator("button.primary")).to_have_count(0)
+
+
+@unittest.skipUnless((WEB / "node_modules" / ".bin" / "wrangler").exists(), "needs npm install in web/")
+class WorkerdTest(UiCase):
+    """The same browser against the real runtime: real asset layer, _headers, D1, service worker."""
+    launch = staticmethod(workerd)
+    cards = TOTAL - COUNTS["problems"]  # no stand-in problem here
+
+    def test_real_headers_and_a_self_graded_card(self):
+        p = self.page
+        expect(p.locator("h1")).to_have_text(f"{self.cards} due")
+        expect(p.locator("body")).to_contain_text("You grade yourself")
+        res = p.request.get(self.base + "/")
+        self.assertIn("default-src 'none'", res.headers["content-security-policy"])
+        self.assertEqual(res.headers["x-content-type-options"], "nosniff")
+        self.assertEqual(p.request.get(self.base + "/api/status").json()["user"], "me")
+        self.start("go")
+        p.fill("textarea", "my answer")
+        p.click("text=Grade myself")
+        expect(p.locator("h2")).to_have_text("Check yourself")
+        p.locator("input[type=checkbox]").first.check()
+        p.click("text=Save")
+        expect(p.locator("h2")).to_contain_text("/ 5")
+        p.click("text=Finish")
+        expect(p.locator("body")).to_contain_text("1 answered today")
+        p.click("nav button[data-tab=report]")
+        expect(p.locator("table")).to_contain_text("go")
+        out = self.exported()
+        self.assertEqual([a["answer"] for a in out["attempts"]], ["my answer"])
+        self.assertEqual(len(out["card_state"]), 1)
+        self.no_overflow()
+
+    def test_offline_answer_is_queued_and_synced(self):
+        p = self.page
+        self.go_offline()
+        expect(p.locator("h1")).to_have_text(f"Offline · {len(self.queue('drill.cards'))} cards")
+        self.start("", 1)
+        p.fill("textarea", "offline answer")
+        p.click("text=Grade myself")
+        expect(p.locator("h2")).to_have_text("Check yourself")
+        p.locator("input[type=checkbox]").first.check()
+        p.click("text=Save")
+        expect(p.locator("body")).to_contain_text("saved on this device")
+        p.click("text=Finish")
+        self.assertEqual([q["answer"] for q in self.queue()], ["offline answer"])
+        self.problems.clear()
+        self.ctx.set_offline(False)  # the browser fires "online": the queue is sent by itself
+        self.wait_until("JSON.parse(localStorage.getItem('drill.queue') || '[]').length === 0")
+        self.assertEqual([a["answer"] for a in self.exported()["attempts"]], ["offline answer"])
 
 
 class IconsTest(UiCase):

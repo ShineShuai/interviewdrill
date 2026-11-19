@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { beforeEach, test } from "node:test";
 import type { Env } from "../src/env.ts";
 import { handle } from "../src/index.ts";
-import { AXES, lineDue, meanScore, parseReview, parseTurns, SCENARIOS } from "../src/mock.ts";
+import {
+  AXES, lineDue, meanScore, mockTrend, parseReview, parseTurns, SCENARIOS,
+} from "../src/mock.ts";
 import { fakeD1 } from "./fake-d1.ts";
 
 const REVIEW = {
@@ -173,6 +175,40 @@ test("report: mock averages per axis, weakest axis, window and owner", async () 
   env = { ...env, DB: fakeD1() as unknown as Env["DB"] };
   const empty = await body(await call("/api/report"));
   assert.deepEqual([empty.mock.n, empty.mock.weakest, empty.mock.recent], [0, null, []]);
+});
+
+test("report: mock trend covers the latest 30 sessions, not just the window, and my own only", async () => {
+  const add = db.raw.prepare(
+    "INSERT INTO mock_sessions(user_id, ts, problem, turns, review) VALUES(?, ?, ?, '[]', ?)",
+  );
+  const rev = (n: number) =>
+    JSON.stringify({ ...REVIEW, scores: Object.fromEntries(AXES.map((a) => [a, n])) });
+  add.run("other", "2026-01-01T00:00:00Z", "theirs", rev(0));
+  for (let i = 0; i < 32; i++) {
+    add.run("me", `2026-0${1 + (i >> 4)}-${10 + (i & 15)}T00:00:00Z`, `p${i}`, rev(i < 29 ? 1 : 4));
+  }
+  add.run("me", "2026-04-01T00:00:00Z", "broken", "{nope");
+  const out = await body(await call("/api/report?days=1")); // the window holds no session
+  assert.equal(out.mock.n, 0);
+  const t = out.mock_trend;
+  assert.equal(t.points.length, 29); // 33 rows, newest 30; the unreadable one is skipped
+  assert.deepEqual(t.change, { by: 3, k: 3 });
+  const empty = mockTrend([]);
+  assert.deepEqual(empty, { points: [], change: null });
+});
+
+test("units: mockTrend compares the latest sessions with the ones before", () => {
+  const row = (n: number) => ({
+    ts: "2026-11-01T00:00:00Z",
+    review: JSON.stringify({ scores: Object.fromEntries(AXES.map((a) => [a, n])) }),
+  });
+  assert.equal(mockTrend([row(2)]).change, null);
+  assert.deepEqual(mockTrend([row(2), row(3)]).change, { by: 1, k: 1 });
+  assert.deepEqual(mockTrend([row(1), row(2), row(5)]).change, { by: 3, k: 1 });
+  assert.deepEqual(mockTrend([row(1), row(1), row(1), row(2), row(2), row(5)]).change, { by: 2, k: 3 });
+  const bad = mockTrend([row(2), { ts: "x", review: "{nope" }, row(4)]);
+  assert.equal(bad.points.length, 2);
+  assert.deepEqual(bad.change, { by: 2, k: 1 });
 });
 
 test("review needs an answer to review", async () => {

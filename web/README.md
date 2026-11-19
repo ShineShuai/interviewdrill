@@ -32,6 +32,8 @@ Browser UI: `python3 -m unittest test_web_ui` from the repo root (needs `pip ins
 and `playwright install chromium`; skipped otherwise). It drives real Chromium against
 `test/ui-server.ts`: the real Worker, security headers and cards, with Workers AI stubbed and
 Pyodide stubbed except in `RealPyodideTest` (real runtime under the real CSP; needs `npm i`).
+`WorkerdTest` drives the same browser against the real runtime (`scripts/workerd-server.ts`: workerd,
+local D1, real asset layer, `_headers` and service worker; about 20 s per test; needs `npm i`).
 
 ## Home-screen icons
 iOS ignores SVG for the home-screen icon. `npm run icons` renders `public/icon.svg` into
@@ -92,7 +94,9 @@ problem. It asks 2-12 lines, probes the weakest part of each answer, and after t
 communication. Voice works like on cards (Record), and "Read the interviewer aloud" speaks the
 lines. The transcript lives in the page; the server stores only the finished session in
 `mock_sessions` (the 10 latest show under Recent; the Report tab adds the average per axis and
-the weakest axis over its window, and the export includes the sessions).
+the weakest axis over its window, plus a score trend over the latest 30 sessions, whenever they
+were: one bar per session and the change of the latest 3 against the 3 before; the export includes
+the sessions).
 - Existing database: `npm run db:migrate-mock` once (`db:init` databases have the table; check with `db:check`).
 - Needs a grader (`workers-ai` or `anthropic`); there is no self-grading mode.
 - Costs one LLM call per interviewer line plus one for the review (6 for the default 5 lines),

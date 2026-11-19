@@ -5,8 +5,8 @@ import { checklist } from "./checklist.ts";
 import { judge, score, type Grade } from "./judge.ts";
 import { providerOf } from "./llm.ts";
 import {
-  LINES, SCENARIOS, interviewerLine, lineDue, meanScore, parseLines, parseProblem, parseReview,
-  parseTurns, reviewInterview, summarize, type Review,
+  LINES, SCENARIOS, interviewerLine, lineDue, meanScore, mockTrend, parseLines, parseProblem,
+  parseReview, parseTurns, reviewInterview, summarize, type Review,
 } from "./mock.ts";
 import { iso, replay, schedule, streak, type CardState } from "./srs.ts";
 
@@ -275,7 +275,7 @@ const stt: Handler = async ({ req, env, user }) => {
 const report: Handler = async ({ env, url, user }) => {
   const days = clampInt(url.searchParams.get("days"), 1, 365, 14);
   const since = iso(new Date(Date.now() - days * DAY_MS));
-  const [topics, weakest, trend, mocks] = await Promise.all([
+  const [topics, weakest, trend, mocks, mockSeries] = await Promise.all([
     env.DB.prepare(
       "SELECT c.topic AS topic, COUNT(*) AS n, AVG(a.score) AS score, " +
         "AVG(a.correct) AS correct, AVG(a.depth) AS depth, AVG(a.clarity) AS clarity " +
@@ -303,10 +303,17 @@ const report: Handler = async ({ env, url, user }) => {
     )
       .bind(user, since)
       .all<{ ts: string; problem: string; review: string }>(),
+    // the trend ignores the window: the latest 30 sessions, whenever they were
+    env.DB.prepare(
+      "SELECT ts, review FROM (SELECT id, ts, review FROM mock_sessions WHERE user_id = ?1 " +
+        "ORDER BY id DESC LIMIT 30) ORDER BY id",
+    )
+      .bind(user)
+      .all<{ ts: string; review: string }>(),
   ]);
   return json({
     days, topics: topics.results, weakest: weakest.results, trend: trend.results,
-    mock: summarize(mocks.results),
+    mock: summarize(mocks.results), mock_trend: mockTrend(mockSeries.results),
   });
 };
 
