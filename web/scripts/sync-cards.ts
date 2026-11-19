@@ -29,6 +29,6 @@ checkCards(cards);
 const file = join(tmpdir(), "drill-cards.sql");
 writeFileSync(file, syncSql(cards));
 console.log(`syncing ${markdown.length} cards + ${exercises.length} exercises (${target})`);
-execFileSync("npx", ["wrangler", "d1", "execute", "drill", target, "--file", file], {
+execFileSync("npx", ["wrangler", "d1", "execute", "interviewdrill", target, "--file", file], {
   stdio: "inherit",
 });

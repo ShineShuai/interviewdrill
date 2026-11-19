@@ -1,4 +1,4 @@
-name = "drill"
+name = "interviewdrill"
 main = "src/index.ts"
 compatibility_date = "2026-09-16"
 
@@ -11,8 +11,8 @@ binding = "AI"
 
 [[d1_databases]]
 binding = "DB"
-database_name = "drill"
-database_id = "REPLACE_WITH_ID_FROM_d1_create"
+database_name = "interviewdrill"
+database_id = "56d0b037-989b-4eec-8dc2-47eb704ab6e8"
 
 [vars]
 # Grading model. Default needs no API key: Cloudflare Workers AI (free daily allowance).

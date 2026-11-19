@@ -67,7 +67,7 @@ async function boot(): Promise<() => void> {
   writeFileSync(config, toml);
   writeFileSync(join(tmp, "cards.sql"), syncSql(cards));
   for (const file of [join(root, "schema.sql"), join(tmp, "cards.sql")]) {
-    wrangler("d1", "execute", "drill", "--local", "-c", config, "--persist-to", state, "--file", file);
+    wrangler("d1", "execute", "interviewdrill", "--local", "-c", config, "--persist-to", state, "--file", file);
   }
   const dev = spawn(
     "npx",
