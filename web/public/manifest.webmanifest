@@ -1,6 +1,6 @@
 {
   "name": "interviewdrill",
-  "short_name": "drill",
+  "short_name": "interviewdrill",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#121214",

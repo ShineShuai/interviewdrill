@@ -1,4 +1,4 @@
-// drill web client: no build step, no inline script/style (strict CSP), textContent only.
+// interviewdrill web client: no build step, no inline script/style (strict CSP), textContent only.
 const view = document.querySelector("#view");
 
 function h(tag, attrs = {}, ...kids) {
@@ -639,7 +639,7 @@ async function report() {
       h("label", {}, `${d.day.slice(5)} (${d.n})`, h("progress", { max: 5, value: d.score })),
     ),
     ...mockReport(r.mock),
-    h("p", {}, h("a", { href: "/api/export", download: "drill-export.json" }, "Export data")),
+    h("p", {}, h("a", { href: "/api/export", download: "interviewdrill-export.json" }, "Export data")),
   );
 }
 

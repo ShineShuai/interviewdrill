@@ -1,4 +1,4 @@
-# drill web
+# interviewdrill web
 
 Cloudflare Worker (API) + D1 + PWA. Cards come from `../cards/*.md` (shared with the CLI),
 plus approved problems and bug exercises (`../export_cards.py`).
@@ -6,9 +6,15 @@ plus approved problems and bug exercises (`../export_cards.py`).
 ## Deploy
 ```
 npm i
-npx wrangler d1 create drill          # paste database_id into wrangler.toml
+npx wrangler login
+npx wrangler d1 create interviewdrill  # paste database_id into wrangler.toml
 npm run db:init && npm run cards
+npm run db:check                       # tables and columns of the remote database
 ```
+`db:init` creates the current schema, so no migration applies to a database made with it. Run
+`db:migrate-sync` only if `attempts` has no `uid` column and `db:migrate-mock` only if
+`mock_sessions` is missing; `db:migrate-sync` on a current database fails with
+`duplicate column name: uid`. `db:migrate-problems` matters only for a database that held `kata:` cards.
 Create a Cloudflare Access (self-hosted) application covering the Worker hostname
 (workers.dev too), allow your email, then set `TEAM_DOMAIN` and `ACCESS_AUD` in
 `wrangler.toml`. The Worker returns 500 until both are set. Then `npm run deploy`.
@@ -87,7 +93,7 @@ communication. Voice works like on cards (Record), and "Read the interviewer alo
 lines. The transcript lives in the page; the server stores only the finished session in
 `mock_sessions` (the 10 latest show under Recent; the Report tab adds the average per axis and
 the weakest axis over its window, and the export includes the sessions).
-- Existing database: `npm run db:migrate-mock` once (fresh ones have the table).
+- Existing database: `npm run db:migrate-mock` once (`db:init` databases have the table; check with `db:check`).
 - Needs a grader (`workers-ai` or `anthropic`); there is no self-grading mode.
 - Costs one LLM call per interviewer line plus one for the review (6 for the default 5 lines),
   counted against `DAILY_CAP`. The terminal version is `../mock_interview.py` (same prompts).
@@ -97,7 +103,8 @@ the weakest axis over its window, and the export includes the sessions).
 each side rebuilds a card's schedule by replaying them in time order, so devices converge.
 `drill.py daily`, `problems.py solve` and `bugs.py next` run it automatically when `DRILL_URL`
 is set.
-1. Existing database: `npm run db:migrate-sync` once (adds `attempts.uid`; fresh ones have it).
+1. Existing database: `npm run db:migrate-sync` once (adds `attempts.uid`; `db:init` databases have it,
+   and the migration then fails; check with `db:check`).
 2. Zero Trust > Access > Service auth: create a service token; add a policy with action
    "Service Auth" and that token to the same application. Copy Client ID and Client Secret.
 3. `wrangler.toml`: `SYNC_CLIENT_ID` = the Client ID, `SYNC_USER` = your Access email. Deploy.

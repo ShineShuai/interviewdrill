@@ -335,7 +335,7 @@ const exportAll: Handler = async ({ env, user }) => {
     { exported: iso(new Date()), user, card_state: state.results, attempts: attempts.results,
       mock_sessions },
     200,
-    { "Content-Disposition": 'attachment; filename="drill-export.json"' },
+    { "Content-Disposition": 'attachment; filename="interviewdrill-export.json"' },
   );
 };
 

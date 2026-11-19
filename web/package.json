@@ -14,6 +14,7 @@
     "predev": "npm run vendor && npm run problems && npm run icons",
     "predeploy": "npm run vendor && npm run problems && npm run icons",
     "db:init": "wrangler d1 execute interviewdrill --remote --file schema.sql",
+    "db:check": "wrangler d1 execute interviewdrill --remote --command \"SELECT m.name AS tbl, group_concat(p.name) AS cols FROM sqlite_master m, pragma_table_info(m.name) p WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%' AND m.name NOT LIKE '_cf_%' GROUP BY m.name\"",
     "db:init:local": "wrangler d1 execute interviewdrill --local --file schema.sql",
     "db:migrate-problems": "wrangler d1 execute interviewdrill --remote --file migrations/0003_problems.sql",
     "db:migrate-mock": "wrangler d1 execute interviewdrill --remote --file migrations/0004_mock.sql",
