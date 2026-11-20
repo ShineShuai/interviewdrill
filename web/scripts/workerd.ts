@@ -39,7 +39,9 @@ export async function boot(port: number): Promise<() => void> {
   try {
     const toml = readFileSync(join(root, "wrangler.toml"), "utf8")
       .replace(/\[ai\]\nbinding = "AI"\n\n?/, "")
-      .replace('LLM = "workers-ai"', 'LLM = "none"');
+      .replace(/^LLM\s*=.*$/m, 'LLM = "none"')
+      // whatever the repo holds for production (Access, sync) must not change what is tested
+      .replace(/^(TEAM_DOMAIN|ACCESS_AUD|SYNC_CLIENT_ID|SYNC_USER)\s*=.*$/gm, '$1 = ""');
     writeFileSync(config, toml);
     writeFileSync(join(tmp, "cards.sql"), syncSql(cards));
     for (const file of [join(root, "schema.sql"), join(tmp, "cards.sql")]) {
