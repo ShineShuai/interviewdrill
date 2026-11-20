@@ -1,0 +1,86 @@
+# Tests on every push and pull request; on a push to main the tests must pass, then the Worker
+# is deployed and the cards are synced to D1 (setup: web/README.md, "Auto deploy").
+# Only first-party actions are used, and the Cloudflare secrets reach only the two deploy steps.
+name: ci-deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22 # npm test runs TypeScript directly: needs Node >= 22.18
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          npm ci --prefix web
+          python -m pip install playwright
+          python -m playwright install --with-deps chromium
+      - name: Node tests, types and workerd smoke test
+        working-directory: web
+        run: |
+          npm test
+          npm run typecheck
+          npm run smoke
+      - name: Python tests (includes the browser tests)
+        run: python -m unittest discover -p "test_*.py"
+
+  deploy:
+    needs: test
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: deploy
+      cancel-in-progress: false
+    steps:
+      - name: Check the secrets
+        env:
+          TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          [ -n "$TOKEN" ] && [ -n "$ACCOUNT" ] || {
+            echo "::error::Add the repository secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID"
+            exit 1
+          }
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: npm ci --prefix web
+      - name: Deploy the Worker and its assets
+        working-directory: web
+        run: npm run deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Sync cards, problems and bug exercises to D1
+        working-directory: web
+        run: npm run cards
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

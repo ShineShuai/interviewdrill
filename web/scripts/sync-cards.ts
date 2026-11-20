@@ -29,6 +29,8 @@ checkCards(cards);
 const file = join(tmpdir(), "drill-cards.sql");
 writeFileSync(file, syncSql(cards));
 console.log(`syncing ${markdown.length} cards + ${exercises.length} exercises (${target})`);
-execFileSync("npx", ["wrangler", "d1", "execute", "interviewdrill", target, "--file", file], {
+// in CI nobody can answer wrangler's "Ok to proceed?" question for a remote database
+const yes = process.env.CI ? ["--yes"] : [];
+execFileSync("npx", ["wrangler", "d1", "execute", "interviewdrill", target, ...yes, "--file", file], {
   stdio: "inherit",
 });
