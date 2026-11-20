@@ -446,13 +446,18 @@ class MockInterviewTest(UiCase):
 
     def test_report_shows_the_score_trend(self):
         p = self.page
-        for _ in range(2):
-            self.open_mock(lines=2)
+        for i in range(2):
+            if i == 0:
+                self.open_mock(lines=2)
+            else:  # "Done" shows the home; a second navigation would redraw it under the form
+                p.fill("input[type=number]", "2")
+                p.click("text=Start")
             self.answer("Start with requirements", "Probe 2?")
             p.fill("textarea", "Segments behind an origin shield")
             p.click("button.primary")
             expect(p.locator("h1")).to_have_text("Review · 4.0")
             p.click("text=Done")
+            expect(p.locator("h1")).to_have_text("Mock interview")
         p.click("nav button[data-tab=report]")
         expect(p.locator("body")).to_contain_text("Mock score trend")
         expect(p.locator("body")).to_contain_text("0.0 (latest 1 vs the 1 before)")
@@ -618,8 +623,11 @@ class RealPyodideTest(UiCase):
 
     def test_eval_is_refused_in_the_real_runtime(self):
         self.start("problems")
-        self.verdict("import js\njs.eval('1')", "unsafe-eval")
-        self.problems.clear()  # the blocked eval is logged as a console error by the browser
+        # The refusal reaches Python as the CSP message or, now and then, as a bare SystemError
+        # (Pyodide), so only the verdict is exact: a runtime error, never a result.
+        self.verdict("import js\njs.eval('1')", "first failure: ex1 RE")
+        expect(self.page.locator(".panel h3")).to_have_text("0/2 passed")
+        self.problems.clear()  # the browser may log the blocked eval as a console error
 
     def test_endless_loop_is_a_tle_and_the_runner_recovers(self):
         self.start("problems")

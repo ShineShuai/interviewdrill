@@ -19,6 +19,33 @@ Create a Cloudflare Access (self-hosted) application covering the Worker hostnam
 (workers.dev too), allow your email, then set `TEAM_DOMAIN` and `ACCESS_AUD` in
 `wrangler.toml`. The Worker returns 500 until both are set. Then `npm run deploy`.
 
+## Auto deploy (GitHub Actions, optional)
+`.github/workflows/deploy.yml` runs all tests on every push and pull request. On a push to `main`
+the tests must pass; then it runs `npm run deploy` and `npm run cards`. Schema changes stay manual
+(`db:migrate-*`). The repository is the source of truth: `npm run cards` deletes cards that are not
+in it, so commit the problems and bug exercises you approved before you push. Setup, once:
+1. Account ID: `npx wrangler whoami` prints it.
+2. API token: Cloudflare dashboard, Manage account, Account API tokens (or Profile, API Tokens),
+   Create Token. Choose the template Edit Cloudflare Workers, then add one permission row:
+   Account, D1, Write (older screens say Edit). Account Resources: Include, your account. Set an
+   expiry date. Create, copy the token (shown once). This repo needs Workers Scripts Write (deploy)
+   and D1 Write (cards); the other rows of the template are extra.
+3. GitHub: the repository, Settings, Secrets and variables, Actions, New repository secret. Add
+   `CLOUDFLARE_API_TOKEN` (the token) and `CLOUDFLARE_ACCOUNT_ID` (step 1).
+4. Check the token on your Mac first (zsh; it is typed hidden and kept out of files and history):
+   ```
+   cd web
+   read -rs "CLOUDFLARE_API_TOKEN?token: "; export CLOUDFLARE_API_TOKEN
+   export CLOUDFLARE_ACCOUNT_ID=<the id from step 1>
+   npm run deploy && npm run cards
+   unset CLOUDFLARE_API_TOKEN
+   ```
+   If this works, the same two values work in GitHub (paste without spaces or a line break).
+   "Authentication error [code: 10000]" means a missing permission.
+5. Push to `main`, or Actions tab, ci-deploy, Run workflow. A deploy without the two secrets fails
+   with a message that names them. If the default branch is not `main`, change it in the workflow.
+Pull requests from forks run the tests only: GitHub does not give them the secrets.
+
 ## Local
 `.dev.vars`: `ANTHROPIC_API_KEY=...` and `DEV_USER=me@localhost` (honored on localhost only).
 ```
