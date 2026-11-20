@@ -116,10 +116,14 @@ class UiCase(unittest.TestCase):
         self.assertEqual(wide, [])
         self.assertLessEqual(self.page.evaluate("document.documentElement.scrollWidth"), 375)
 
+    def press(self, name):
+        """Click the button called exactly `name`: text= would also match card text ("AV1 saves ...")."""
+        self.page.get_by_role("button", name=name, exact=True).click()
+
     def start(self, topic="", n=1):
         self.page.select_option("select", topic)
         self.page.fill("input[type=number]", str(n))
-        self.page.click("text=Start")
+        self.press("Start")
 
     def go_offline(self, forget_cards=False):
         p = self.page
@@ -179,7 +183,7 @@ class GradedTest(UiCase):
         expect(p.locator("p.dim").first).to_contain_text("2/2 · go")
         p.fill("textarea", "second")
         p.press("textarea", "Control+Enter")
-        p.click("text=Finish")
+        self.press("Finish")
         expect(p.locator("h1")).to_have_text(f"{TOTAL - 2} due")
         expect(p.locator("body")).to_contain_text("2 answered today")
 
@@ -197,7 +201,7 @@ class GradedTest(UiCase):
         self.start("go")
         p.fill("textarea", "x")
         p.click("button.primary")
-        p.click("text=Finish")
+        self.press("Finish")
         p.click("nav >> text=Report")
         expect(p.locator("table")).to_contain_text("go")
         expect(p.locator("a[download]")).to_have_attribute("href", "/api/export")
@@ -206,28 +210,28 @@ class GradedTest(UiCase):
     def test_voice_fills_the_answer_box(self):
         p = self.page
         self.start("go")
-        p.click("text=Record")
-        expect(p.locator("text=Stop")).to_be_visible()
+        self.press("Record")
+        expect(p.get_by_role("button", name="Stop", exact=True)).to_be_visible()
         p.wait_for_timeout(1200)
-        p.click("text=Stop")
+        self.press("Stop")
         expect(p.locator("textarea")).to_have_value("spoken words", timeout=15000)
-        expect(p.locator("text=Record")).to_be_visible()
+        expect(p.get_by_role("button", name="Record", exact=True)).to_be_visible()
 
     def test_problem_runner_passes_and_fails(self):
         p = self.page
         self.start("problems")
         expect(p.locator("pre.q")).to_contain_text("Read a and b")
         p.fill("textarea", SOLUTION)
-        p.click("text=Run as Python")
+        self.press("Run as Python")
         expect(p.locator(".panel h3")).to_have_text("2/2 passed", timeout=15000)
         p.fill("textarea", "print(0)")
-        p.click("text=Run as Python")
+        self.press("Run as Python")
         expect(p.locator(".panel h3")).to_have_text("0/2 passed", timeout=15000)
         expect(p.locator(".panel")).to_contain_text("first failure: ex1 WA")
         expect(p.locator(".panel pre")).to_contain_text("expected: 3")
         expect(p.locator(".panel")).to_contain_text("next review in")
         p.fill("textarea", "print(1/0)")
-        p.click("text=Run as Python")
+        self.press("Run as Python")
         expect(p.locator(".panel pre").first).to_contain_text("ZeroDivisionError", timeout=15000)
         self.no_overflow()
 
@@ -235,7 +239,7 @@ class GradedTest(UiCase):
         p = self.page
         self.start("problems")
         p.fill("textarea", "import js\nprint(js.fetch('/api/export'))")
-        p.click("text=Run as Python")
+        self.press("Run as Python")
         expect(p.locator(".panel h3")).to_have_text("0/2 passed", timeout=15000)
 
     def test_csp_in_the_page(self):
@@ -284,15 +288,15 @@ class GradedTest(UiCase):
         before = p.evaluate("new Date().toISOString()")
         for i in range(2):
             p.fill("textarea", f"offline answer {i}")
-            p.click("text=Grade myself")
+            self.press("Grade myself")
             expect(p.locator("h2")).to_have_text("Check yourself")
             p.locator("input[type=checkbox]").first.check()
             self.no_overflow()
-            p.click("text=Save")
+            self.press("Save")
             expect(p.locator("body")).to_contain_text("saved on this device")
             if i == 0:
                 p.get_by_role("button", name="Next", exact=True).click()
-        p.click("text=Finish")
+        self.press("Finish")
         expect(p.locator("h1")).to_have_text(f"Offline · {cached - 2} cards")
         expect(p.locator("body")).to_contain_text("2 answers wait to sync")
         queued = self.queue()
@@ -317,9 +321,9 @@ class GradedTest(UiCase):
         p.route("**/api/self-grade", lambda r: r.abort())
         self.start("go")
         p.fill("textarea", "will be queued")
-        p.click("text=Grade myself")
+        self.press("Grade myself")
         p.locator("input[type=checkbox]").first.check()
-        p.click("text=Save")
+        self.press("Save")
         expect(p.locator("body")).to_contain_text("saved on this device")
         self.assertEqual([q["answer"] for q in self.queue()], ["will be queued"])
         p.unroute("**/api/self-grade")
@@ -375,16 +379,16 @@ class SelfGradeTest(UiCase):
         self.start("go")
         expect(p.locator("button.primary")).to_have_count(0)  # no model: no Submit button
         p.fill("textarea", "my answer")
-        p.click("text=Grade myself")
+        self.press("Grade myself")
         expect(p.locator("h2")).to_have_text("Check yourself")
         boxes = p.locator("input[type=checkbox]")
         self.assertGreaterEqual(boxes.count(), 2)
         boxes.nth(0).check()
         boxes.nth(1).check()
         self.no_overflow()
-        p.click("text=Save")
+        self.press("Save")
         expect(p.locator("h2")).to_contain_text("/ 5")
-        p.click("text=Finish")
+        self.press("Finish")
         expect(p.locator("body")).to_contain_text("1 answered today")
 
     def test_ctrl_enter_opens_the_self_check(self):
@@ -404,7 +408,7 @@ class GraderDownTest(UiCase):
         expect(p.locator("p.err")).to_contain_text('grader unavailable')
         expect(p.locator("p.err")).to_contain_text('You can still use "Grade myself"')
         self.problems.clear()  # the 502 is logged as a console error by the browser
-        p.click("text=Grade myself")
+        self.press("Grade myself")
         expect(p.locator("h2")).to_have_text("Check yourself")
 
 
@@ -417,7 +421,7 @@ class MockInterviewTest(UiCase):
             p.fill("textarea", own)
         if lines:
             p.fill("input[type=number]", str(lines))
-        p.click("text=Start")
+        self.press("Start")
 
     def answer(self, text, expect_line):
         self.page.fill("textarea", text)
@@ -437,7 +441,7 @@ class MockInterviewTest(UiCase):
         expect(p.locator("table tr")).to_have_count(6)
         expect(p.locator("body")).to_contain_text("size the origin")
         self.no_overflow()
-        p.click("text=Done")
+        self.press("Done")
         expect(p.locator("body")).to_contain_text("· 4.0 · Design a live-streaming platform")
         p.click("nav button[data-tab=report]")
         expect(p.locator("body")).to_contain_text("Mock interviews")
@@ -451,12 +455,12 @@ class MockInterviewTest(UiCase):
                 self.open_mock(lines=2)
             else:  # "Done" shows the home; a second navigation would redraw it under the form
                 p.fill("input[type=number]", "2")
-                p.click("text=Start")
+                self.press("Start")
             self.answer("Start with requirements", "Probe 2?")
             p.fill("textarea", "Segments behind an origin shield")
             p.click("button.primary")
             expect(p.locator("h1")).to_have_text("Review · 4.0")
-            p.click("text=Done")
+            self.press("Done")
             expect(p.locator("h1")).to_have_text("Mock interview")
         p.click("nav button[data-tab=report]")
         expect(p.locator("body")).to_contain_text("Mock score trend")
@@ -468,13 +472,13 @@ class MockInterviewTest(UiCase):
         p = self.page
         self.open_mock(own="Design a thumbnail service")
         expect(p.locator(".chat")).to_contain_text("Probe 1?")
-        p.click("text=Finish and review")
+        self.press("Finish and review")
         expect(p.locator(".err")).to_have_text("Answer at least once first.")
         self.answer("Generate them at upload", "Probe 2?")
         p.fill("textarea", "unsent draft counts too")
-        p.click("text=Finish and review")
+        self.press("Finish and review")
         expect(p.locator("h1")).to_contain_text("Review")
-        p.click("text=Done")
+        self.press("Done")
         expect(p.locator("body")).to_contain_text("Design a thumbnail service")
 
 
@@ -484,7 +488,7 @@ class MockFailureTest(UiCase):
     def test_a_failing_model_is_reported_and_can_be_retried(self):
         p = self.page
         p.click("nav button[data-tab=mock]")
-        p.click("text=Start")
+        self.press("Start")
         expect(p.locator(".err")).to_contain_text("grader unavailable")
         expect(p.locator(".err")).to_contain_text("Press Send to retry")
         expect(p.locator("button.primary")).to_be_enabled()
@@ -517,12 +521,12 @@ class WorkerdTest(UiCase):
         self.assertEqual(p.request.get(self.base + "/api/status").json()["user"], "me")
         self.start("go")
         p.fill("textarea", "my answer")
-        p.click("text=Grade myself")
+        self.press("Grade myself")
         expect(p.locator("h2")).to_have_text("Check yourself")
         p.locator("input[type=checkbox]").first.check()
-        p.click("text=Save")
+        self.press("Save")
         expect(p.locator("h2")).to_contain_text("/ 5")
-        p.click("text=Finish")
+        self.press("Finish")
         expect(p.locator("body")).to_contain_text("1 answered today")
         p.click("nav button[data-tab=report]")
         expect(p.locator("table")).to_contain_text("go")
@@ -537,12 +541,12 @@ class WorkerdTest(UiCase):
         expect(p.locator("h1")).to_have_text(f"Offline · {len(self.queue('drill.cards'))} cards")
         self.start("", 1)
         p.fill("textarea", "offline answer")
-        p.click("text=Grade myself")
+        self.press("Grade myself")
         expect(p.locator("h2")).to_have_text("Check yourself")
         p.locator("input[type=checkbox]").first.check()
-        p.click("text=Save")
+        self.press("Save")
         expect(p.locator("body")).to_contain_text("saved on this device")
-        p.click("text=Finish")
+        self.press("Finish")
         self.assertEqual([q["answer"] for q in self.queue()], ["offline answer"])
         self.problems.clear()
         self.ctx.set_offline(False)  # the browser fires "online": the queue is sent by itself
@@ -588,7 +592,7 @@ class RealPyodideTest(UiCase):
 
     def run_python(self, code):
         self.page.fill("textarea", code)
-        self.page.click("text=Run as Python")
+        self.press("Run as Python")
 
     def verdict(self, code, text):
         self.run_python(code)
